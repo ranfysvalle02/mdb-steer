@@ -1,218 +1,170 @@
 # mdb-steer
 
-----
+**A learned LLM router backed by MongoDB Atlas Vector Search.** mdb-steer decides, for each query,
+whether a small model is good enough or the large model is worth paying for. It makes that call
+from evidence: how both models actually performed on similar past queries.
 
-
-# Dynamic LLM Routing and Telemetry with RouteLLM, Ollama, and MongoDB Atlas
-
-Running high-capability large language models like `llama3.3:70b` across every production request is economically wasteful. While complex tasks—such as lock-free C++ concurrency or dynamic programming—demand deep reasoning, standard tasks like basic string manipulation or factual lookups are handled just as well by compact, high-throughput models like `llama3.2:3b`.
-
-To bridge this efficiency gap, we built **`mdb-steer`**: an open-source dynamic model routing framework. `mdb-steer` evaluates incoming query difficulty in real time, routes requests to the optimal local LLM via Ollama, validates output quality using Braintrust `autoevals`, and persists real-time operational telemetry inside **MongoDB Atlas**.
+It runs entirely locally with Docker: MongoDB Atlas Local (with Vector Search) plus Ollama.
+No API keys, no cloud accounts.
 
 ---
 
-## The Core Problem: Over-provisioning Compute
+## Why
 
-In standard AI deployments, system architects face a forced trade-off:
+Sending every request to your largest model wastes compute. Many queries ("capital of France?",
+"sum a list in Python") are answered just as well by a model that's 5 to 10x cheaper. Others
+(concurrency bugs, multi-step math) aren't. A static rule can't tell them apart. A router that
+remembers how each model did on queries like this one can.
 
-1. **Static Strong Routing (`llama3.3:70b`)**: Guarantees high quality and low hallucination rates, but incurs significant compute costs and high latency overhead ($T_{\text{latency}} \sim 450\text{ ms}$).
-2. **Static Weak Routing (`llama3.2:3b`)**: Delivers low-latency ($T_{\text{latency}} \sim 80\text{ ms}$) and low compute costs, but fails on complex code generation and multi-step reasoning.
-
-`mdb-steer` solves this by introducing a **dynamic sidecar router** that dynamically estimates the win probability of the strong model ($P_{\text{strong}}$) before execution.
+## How it works
 
 ```
-                  +-------------------+
-                  |   Incoming Query  |
-                  +---------+---------+
-                            |
-                            v
-               +-------------------------+
-               |  mdb-steer Router      |
-               |  (Matrix Factorization) |
-               +------------+------------+
-                            |
-         +------------------+------------------+
-         | P(Strong) >= 0.50                   | P(Strong) < 0.50
-         v                                     v
-+------------------+                  +------------------+
-|  llama3.3:70b    |                  |   llama3.2:3b    |
-|  (Strong Model)  |                  |   (Weak Model)   |
-+--------+---------+                  +--------+---------+
-         |                                     |
-         +------------------+------------------+
-                            |
-                            v
-               +-------------------------+
-               |  Braintrust AutoEvals   |
-               |  (Quality Verification) |
-               +------------+------------+
-                            |
-                            v
-               +-------------------------+
-               |  MongoDB Atlas ODL      |
-               |  (Telemetry & Datasets) |
-               +-------------------------+
-
+                    query
+                      │
+                      ▼
+        ┌──────────────────────────┐
+        │ embed (nomic-embed-text) │
+        └────────────┬─────────────┘
+                     ▼
+        ┌──────────────────────────┐       calibration collection:
+        │ Atlas $vectorSearch k-NN │◄──────  { query, embedding,
+        └────────────┬─────────────┘         scores: {strong, weak} }
+                     ▼
+     P(strong wins) = similarity-weighted share of neighbours
+                      where strong beat weak by > margin
+                     │
+         ≥ threshold │ < threshold
+          ┌──────────┴──────────┐
+          ▼                     ▼
+     strong model           weak model
+          └──────────┬──────────┘
+                     ▼
+            telemetry → MongoDB
 ```
 
----
+1. **Calibrate.** Run *both* models on a labelled calibration set. An LLM judge grades each
+   answer against a reference (0 to 1). Store the query embedding and both scores in MongoDB and
+   build an Atlas Vector Search index over them.
+2. **Route.** Combine a few signals into P(strong wins) with a class-balanced logistic model
+   fitted on the calibration set:
+   - the similarity-weighted share of the k nearest calibration neighbours (`$vectorSearch`)
+     where the strong model won by more than `ROUTER_WIN_MARGIN`;
+   - text difficulty features: multi-step wording, length, numbers;
+   - the weak model's self-rated confidence (optional; its compute is charged to the router).
 
-## Technical Architecture of `mdb-steer`
+   The router sees **only the query text**. No difficulty labels.
+3. **Benchmark.** On a **held-out** set, route each query *and* run both models, so the router can
+   be compared honestly against every alternative:
 
-`mdb-steer` consists of four primary components:
+| strategy     | meaning                                                              |
+| ------------ | -------------------------------------------------------------------- |
+| `all_strong` | quality ceiling / cost ceiling                                       |
+| `all_weak`   | cost floor                                                           |
+| `router`     | mdb-steer                                                            |
+| `random`     | expected result of offloading the *same share* of traffic at random  |
+| `oracle`     | cheapest model achieving the best score per query (upper bound)      |
 
-### 1. Matrix Factorization Router Logic
+   The number that matters is **lift over random**. If the router can't beat random routing at
+   the same offload rate, it isn't learning anything. The run exits non-zero if the quality drop
+   vs. `all_strong` exceeds `QUALITY_GUARDRAIL_PCT`, so it can gate CI or a deploy.
 
-The router computes a logit score based on difficulty heuristics and domain-specific keywords (e.g., C++, Rust, DP algorithms). The probability of requiring the strong model is calculated using the sigmoid function:
+**Measured, not assumed.** Cost is Ollama's server-reported compute time (prompt eval +
+generation, *excluding* model load) × `GPU_COST_PER_HOUR`. Token counts come from Ollama. Compose
+keeps all models resident (`OLLAMA_MAX_LOADED_MODELS=3`) so swapping doesn't distort latency.
 
-$$P(\text{Strong}) = \frac{1}{1 + e^{-\text{logit}}}$$
+## Results
 
-* **Easy Queries** ($\text{logit} = -0.8 \rightarrow P \approx 0.31$): Routed to `llama3.2:3b`.
-* **Medium Queries** ($\text{logit} = 0.0 \rightarrow P \approx 0.50$): Evaluated dynamically based on domain context.
-* **Hard/Coding Queries** ($\text{logit} \ge 1.4 \rightarrow P \ge 0.80$): Escorted to `llama3.3:70b`.
+On 15 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`), the router beats random
+routing at every threshold from 0.1 to 0.6. At threshold 0.3 it passes a 5% quality guardrail
+while sending 33% of traffic to the 1B model. The saving is small (4.9%), because on this
+workload **even an oracle router saves only 14.7%**: the easy queries are also the cheap ones.
+See [review.md](review.md) for the full results and caveats, and [blog.md](blog.md) for the story.
 
-### 2. Ollama Local Execution Engine
+## Quickstart
 
-By leveraging Ollama's OpenAI-compatible local endpoints (`http://localhost:11434/v1`), `mdb-steer` manages execution across local instances without external cloud API dependencies.
-
-### 3. Automated Quality Guardrails (AutoEvals)
-
-To prevent quality regression, every output is evaluated in real time across three automated evaluation metrics via Braintrust `autoevals`:
-
-* **Exact Match (EM)**: Binary scoring for deterministic queries.
-* **Levenshtein Similarity**: String distance matching against target expectations.
-* **Factuality Score**: Semantic verification to catch off-model hallucinations.
-
-A weighted **Composite Quality Score** out of $10.0$ is generated:
-
-$$\text{Composite Score} = (0.25 \times \text{Levenshtein} + 0.15 \times \text{ExactMatch} + 0.60 \times \text{Factuality}) \times 10$$
-
-### 4. MongoDB Atlas Operational Data Layer (ODL)
-
-All routing metadata, decision overhead latencies, token consumption, compute costs, and `autoevals` outputs are saved directly to MongoDB Atlas (`routellm_ops_db.query_telemetry`). This operational telemetry serves two purposes:
-
-1. **Real-time Monitoring**: Tracking cost reduction vs. quality drift.
-2. **Retraining Dataset Creation**: Query pairs where the weak model scores unexpectedly high are used as fine-tuning targets for future router iterations.
-
----
-
-## Python Pipeline Implementation
-
-Below is the core implementation of the `mdb-steer` pipeline, showing how routing decisions are evaluated and stored:
-
-```python
-import os
-import math
-import time
-import random
-from dataclasses import dataclass, asdict
-from typing import Dict, Any, Tuple
-
-import pymongo
-from autoevals import Levenshtein, ExactMatch, Factuality
-
-STRONG_MODEL = "llama3.3:70b"
-WEAK_MODEL = "llama3.2:3b"
-
-MODEL_COMPUTE_COST = {
-    "llama3.3:70b": {"input_cost_per_1m": 0.80, "output_cost_per_1m": 2.40},
-    "llama3.2:3b":  {"input_cost_per_1m": 0.04, "output_cost_per_1m": 0.12}
-}
-
-class RouteLLMMFRouter:
-    """Matrix Factorization & Heuristic Router for mdb-steer."""
-    def __init__(self, threshold: float = 0.50):
-        self.threshold = threshold
-        self.code_keywords = {"code", "function", "python", "rust", "c++", "algorithm", "lock-free", "dp", "raft"}
-
-    def route(self, query_text: str, difficulty: str) -> Tuple[str, float, float]:
-        start = time.perf_counter()
-        text_lower = query_text.lower()
-        is_coding = any(kw in text_lower for kw in self.code_keywords)
-        
-        logit = -0.8
-        if difficulty == "medium": 
-            logit += 0.8
-        elif difficulty == "hard": 
-            logit += 2.2
-            
-        if is_coding and difficulty in ("medium", "hard"): 
-            logit += 1.1
-
-        p_strong = 1.0 / (1.0 + math.exp(-logit))
-        overhead_ms = (time.perf_counter() - start) * 1000.0
-        chosen_model = STRONG_MODEL if p_strong >= self.threshold else WEAK_MODEL
-        
-        return chosen_model, round(p_strong, 3), round(overhead_ms, 3)
-
+```bash
+docker compose up -d mongodb ollama
+docker compose run --rm app calibrate      # first run pulls models (~6 GB)
+docker compose run --rm app benchmark
+docker compose run --rm app sweep --rescore  # cost/quality curve, no model calls
+docker compose run --rm app route "Implement a lock-free queue in C++" --answer
 ```
 
----
+Or run the Python locally against the containers:
 
-## Benchmark Results: Baseline vs. `mdb-steer`
-
-When executing our $10$-query benchmark suite (spanning standard QA, regular expressions, complex C++ lock-free data structures, and Raft consensus implementations), `mdb-steer` demonstrated substantial compute savings with negligible impact on quality.
-
-### Pipeline Decision Breakdown
-
-| ID | Difficulty | $P(\text{Strong})$ | Model Chosen | Factuality | Composite Quality Score |
-| --- | --- | --- | --- | --- | --- |
-| **q01** | easy | 0.310 | `llama3.2:3b` | 0.950 | 7.20 / 10.0 |
-| **q02** | medium | 0.500 | `llama3.3:70b` | 0.980 | 7.38 / 10.0 |
-| **q03** | easy | 0.310 | `llama3.2:3b` | 0.950 | 7.20 / 10.0 |
-| **q04** | hard | 0.924 | `llama3.3:70b` | 0.950 | 7.20 / 10.0 |
-| **q05** | hard | 0.924 | `llama3.3:70b` | 0.950 | 7.20 / 10.0 |
-| **q06** | medium | 0.500 | `llama3.3:70b` | 0.980 | 7.38 / 10.0 |
-| **q07** | easy | 0.310 | `llama3.2:3b` | 0.950 | 7.20 / 10.0 |
-| **q08** | hard | 0.924 | `llama3.3:70b` | 0.950 | 7.20 / 10.0 |
-| **q09** | easy | 0.310 | `llama3.2:3b` | 0.950 | 7.20 / 10.0 |
-| **q10** | medium | 0.750 | `llama3.3:70b` | 0.980 | 7.38 / 10.0 |
-
-### System Metric Comparison
-
-| Performance Metric | Baseline (100% 70B) | `mdb-steer` Dynamic Routing | Impact Delta |
-| --- | --- | --- | --- |
-| **Traffic Offloaded to 3B** | 0.0% | **40.0%** | +40.0% compute capacity |
-| **Total Compute Cost** | $0.00392 USD | **$0.00248 USD** | **36.73% Cost Reduction** |
-| **Average Quality Score** | 7.33 / 10.0 | **7.26 / 10.0** | **99.05% Quality Retention** |
-| **Quality Regression** | 0.0% | **0.95%** | **PASS** (< 2.0% Guardrail) |
-
----
-
-## Operational Intelligence via MongoDB Atlas
-
-By funneling all telemetry into MongoDB Atlas, `mdb-steer` provides actionable insights through structured document schemas. Here is an example document logged during runtime:
-
-```json
-{
-  "_id": { "$oid": "66f332a81b2e4c8f12a39b01" },
-  "query_id": "q03",
-  "category": "coding",
-  "difficulty": "easy",
-  "model_chosen": "llama3.2:3b",
-  "p_strong_win": 0.31,
-  "decision_latency_ms": 1.24,
-  "execution_latency_ms": 84.2,
-  "prompt_tokens": 35,
-  "completion_tokens": 45,
-  "compute_cost_usd": 0.0000068,
-  "autoeval_metrics": {
-    "exact_match": 0.0,
-    "levenshtein_similarity": 0.60,
-    "factuality_score": 0.95,
-    "composite_quality_score": 7.20,
-    "rationale": "AutoEvals Score -> Factuality: 0.95, Levenshtein: 0.60, ExactMatch: 0.0"
-  },
-  "timestamp": 1727194618.322
-}
-
+```bash
+pip install -e .
+docker compose up -d mongodb ollama && docker compose run --rm ollama-pull
+python -m mdb_steer calibrate
+python -m mdb_steer benchmark
 ```
 
-This telemetry stream enables dynamic monitoring via Atlas Charts to track real-time routing breakdown, model accuracy drift, and cost savings over time.
+Results depend on your hardware and models. Every run is stored, so you can compare runs over time.
 
----
+## Data model (database `mdb_steer`)
 
-## Next Steps for `mdb-steer`
+| collection       | contents                                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| `calibration`    | one doc per calibration query: embedding, per-model scores, full answers, judge reasons. Vector-indexed. |
+| `telemetry`      | one doc per routed query: decision, p_strong, neighbours used, and both models' attempts         |
+| `router_models`  | every fit: feature weights, standardisation, training rows, train accuracy                      |
+| `benchmark_runs` | run summary: every strategy's quality / cost / offload, guardrail verdict, settings snapshot     |
 
-1. **Atlas Vector Search Integration**: Replacing simple logit heuristics with semantic embedding lookups stored in MongoDB Atlas to classify query intent and complexity automatically.
-2. **Online Router Preference Learning**: Using saved telemetry from MongoDB Atlas to fine-tune a specialized router model via Direct Preference Optimization (DPO).
+The telemetry is also the retraining signal. Any benchmark query can be promoted into
+`calibration` to sharpen the router where it is weakest.
+
+## Configuration
+
+All settings are environment variables (see `mdb_steer/config.py`):
+
+| variable                | default            | purpose                                         |
+| ----------------------- | ------------------ | ----------------------------------------------- |
+| `STRONG_MODEL`          | `llama3.1:8b`      | expensive model                                 |
+| `WEAK_MODEL`            | `llama3.2:1b`      | cheap model                                     |
+| `JUDGE_MODEL`           | = `STRONG_MODEL`   | grader; use a third model to avoid self-bias    |
+| `EMBED_MODEL`           | `nomic-embed-text` | query embeddings                                |
+| `ROUTER_THRESHOLD`      | `0.5`              | route strong when P(strong wins) ≥ this         |
+| `ROUTER_K`              | `5`                | neighbours per decision                         |
+| `ROUTER_WIN_MARGIN`     | `0.1`              | how much strong must beat weak to count as a win |
+| `ROUTER_SELF_CONFIDENCE`| `true`             | use the weak model's self-confidence as a feature |
+| `ROUTER_L2`             | `0.01`             | regularisation for the logistic combiner        |
+| `GPU_COST_PER_HOUR`     | `1.00`             | prices measured GPU time                        |
+| `QUALITY_GUARDRAIL_PCT` | `5.0`              | max allowed quality drop vs. all-strong         |
+
+Other commands: `fit` refits the router, and `regrade` re-judges stored calibration answers after a
+judge change without regenerating them.
+
+The threshold is the cost/quality dial. `sweep` replays the latest benchmark run from stored
+telemetry across thresholds, making no model calls, to trace the whole trade-off curve:
+
+```bash
+docker compose run --rm app sweep --thresholds 0.2,0.4,0.5,0.6,0.8
+docker compose run --rm app sweep --rescore   # re-evaluate with the latest fitted router
+```
+
+## Known limitations
+
+- **Judge bias.** By default the strong model grades itself. Set `JUDGE_MODEL` to an independent model for fairer scores.
+- **Small datasets.** The bundled sets (30 calibration / 15 benchmark) are for demonstration. Router quality scales with calibration coverage ([#1](https://github.com/ranfysvalle02/mdb-steer/issues/1)).
+- **Benchmark cost.** The benchmark runs both models on every query so all strategies can be compared. Production routing runs only the chosen model.
+
+## Project layout
+
+```
+mdb_steer/
+  config.py    settings from env
+  llm.py       Ollama client (chat + embeddings, measured latency/usage)
+  judge.py     LLM-as-judge grading against a reference
+  store.py     MongoDB collections + Atlas Vector Search index
+  features.py  difficulty features, self-confidence, logistic fit
+  router.py    feature extraction, routing decision, fitting
+  pipeline.py  calibrate / benchmark workflows and strategy comparison
+  cli.py       command-line interface
+data/
+  calibration.jsonl   router training set
+  benchmark.jsonl     held-out evaluation set
+```
+
+## License
+
+MIT
