@@ -3,7 +3,7 @@
 ----
 
 
-# Building mdb-steer: Dynamic LLM Routing and Telemetry with RouteLLM, Ollama, and MongoDB Atlas
+# Dynamic LLM Routing and Telemetry with RouteLLM, Ollama, and MongoDB Atlas
 
 Running high-capability large language models like `llama3.3:70b` across every production request is economically wasteful. While complex tasks—such as lock-free C++ concurrency or dynamic programming—demand deep reasoning, standard tasks like basic string manipulation or factual lookups are handled just as well by compact, high-throughput models like `llama3.2:3b`.
 
