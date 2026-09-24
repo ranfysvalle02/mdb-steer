@@ -1,32 +1,22 @@
 # mdb-steer: Project Review
 
-**Score: 7 / 10.** The engineering is sound and every result can be reproduced. The router works, but the win is small. The main barrier to 9+ is data volume ([#1](https://github.com/ranfysvalle02/mdb-steer/issues/1)), not code.
+**Score: 7 / 10.** The engineering is sound and every result can be reproduced. The router works, and the oracle analysis shows the savings ceiling on this workload is low. The main barrier to 9+ is data volume and a workload with more room to save ([#1](https://github.com/ranfysvalle02/mdb-steer/issues/1)), not code.
 
 ---
 
 ## TL;DR
 
-- mdb-steer went from a **mock demo** (hardcoded quality scores, the router given the answer, a guardrail that always printed `PASS`) to a **real, measured router**. It runs locally in Docker with no API keys.
-- On 15 held-out queries, the fitted router **beats random routing at every threshold from 0.1 to 0.6**. At threshold 0.3 it **passes the 5% quality guardrail** while sending **33%** of traffic to the 1B model.
-- The savings are small: **4.9%** at that setting. The **oracle**, which is perfect routing, would save only **14.7%**. Routing value is capped by *where the cost is*, not only by how good the router is.
-- Three measurement bugs were found and fixed by looking at real data: a lenient judge, model-swap latency, and a class-imbalanced fit. Each one made the results look different from reality.
+- **The key finding:** on this workload even an **oracle** (a perfect router) saves only **14.7%**, while sending 47% of traffic to the 1B model. The queries a small model can handle are also the cheap ones, so traffic mix caps the savings more than router quality does.
+- The fitted router **beats random routing at every threshold from 0.1 to 0.6**. At threshold 0.3 it **passes the 5% quality guardrail** while sending **33%** of traffic to the 1B model, for a **4.9%** saving, about a third of the oracle's.
+- Every number is measured: judge-graded quality, cost from server-side compute time, results stored in MongoDB, and a guardrail that sets the exit code. It all runs locally in Docker with no API keys.
 
 ## Executive summary
 
-LLM routing promises to cut inference cost by sending easy queries to a small model. The first version of this project claimed a 36.7% cost cut with 99% quality retention, but those numbers came from the script's own assumptions: the router was given each query's difficulty label, the Factuality score was a constant, and failed calls returned the reference answer.
+mdb-steer is a learned LLM router. For each query it decides whether `llama3.2:1b` is good enough or `llama3.1:8b` is worth the cost, using only the query text: an Atlas Vector Search neighbour vote over graded calibration queries, text difficulty features, and the weak model's self-confidence, combined by a class-balanced logistic model.
 
-The rebuild replaces every simulated piece with a measured one:
+The benchmark compares the router against all-strong, all-weak, random routing at the same offload rate, and an oracle. That comparison produced the project's main finding. The oracle shows the most routing can save here is about 15%, because the queries the 1B model gets right have short, cheap answers. The router captures part of that and beats random routing. The small dataset (30 calibration, 15 benchmark) is the main limit on how far the evidence goes.
 
-| Concern | Before | Now |
-|---|---|---|
-| Routing input | hand-labelled difficulty | query text only |
-| Router | hand-tuned logit | Atlas Vector Search kNN + text features + weak-model self-confidence, combined by a fitted logistic model |
-| Quality | hardcoded 0.98 / 0.65 | LLM judge, categorical verdict against a reference |
-| Cost | invented tokens × invented prices | Ollama server-side compute time × GPU $/hr, excluding model load |
-| Evaluation | same 10 queries, no baseline | held-out set; compared against all-strong, all-weak, random and oracle |
-| Guardrail | always `PASS` | enforced; non-zero exit on failure |
-
-On this dataset the router produces a real but modest gain. It is a solid foundation to scale up, but it doesn't yet show large savings.
+Everything (answers, verdicts, embeddings, features, fitted models, run summaries) is stored in MongoDB. Changing the judge, the router or the threshold replays stored data instead of calling the models again, so iteration takes minutes even on CPU.
 
 ## Results
 
@@ -40,7 +30,7 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 | all_weak | 0.567 | 0.0922 | 100% |
 | oracle | 0.900 | 0.1443 | 47% |
 
-**Router, fitted logistic model (sweep replayed from stored telemetry; the router cost includes the self-confidence call)**
+**Router (threshold sweep; router cost includes the self-confidence call)**
 
 | threshold | offload | cost savings | quality drop | vs. random | guardrail (≤5%) |
 |---|---|---|---|---|---|
@@ -53,26 +43,22 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 
 Fitted weights (standardised features): `knn_p_strong −1.83`, `multi_step +0.88`, `length +0.86`, `numeric +0.52`, `weak_uncertainty −0.41`. Training accuracy 80%, against a 67% majority-class baseline.
 
-**Earlier runs, kept for the record**
-- v1 (kNN only, 0–10 judge): quality drop 33% at threshold 0.5, lift over random −0.011. Failed.
-- v2 (logistic without class balancing): predicted "weak" for every query and was identical to all-weak. Failed.
-
 ## Key insights
 
 1. **The oracle ceiling matters more than router accuracy.** Perfect routing saves only 14.7% here, because the queries the 1B model can answer (facts, short rewrites) produce short, cheap answers. Most of the cost is in long answers to hard queries, and those need the strong model anyway. Before building a router, measure the oracle: it tells you the most routing can ever save on your traffic.
-2. **Small judges are too lenient on a 0–10 scale.** An 8B judge gave 0.8/1.0 to `BANANA → 30` (the correct answer is 60). Switching to a categorical verdict (CORRECT, PARTIAL or INCORRECT) moved the count of "strong clearly wins" from 2 to 10 out of 30 calibration queries. Without that, the router had nothing to learn from.
-3. **Model swapping distorted the cost numbers.** Without `OLLAMA_MAX_LOADED_MODELS`, Ollama reloaded models 28 times during one run, and wall-clock latency mostly measured loading. The measured all-weak cost advantage went from 26% to 45% once cost used server-reported compute time instead of wall-clock.
+2. **Small judges need categorical verdicts.** On a 0–10 scale an 8B judge gave 8/10 to `BANANA → 30` (the correct answer is 60), and scores bunched together. With CORRECT, PARTIAL or INCORRECT verdicts, the strong model clearly wins 10 of 30 calibration queries, which gives the router something to learn from.
+3. **Price compute, not wall-clock time.** When models share one Ollama instance they push each other out of memory, and wall-clock latency mostly measures loading. With all models kept loaded and cost based on server-reported compute time, all-weak is 45% cheaper than all-strong. On CPU, the 1B model generates only about 1.5× faster (11.3 vs 7.6 tokens/sec).
 4. **Difficulty wording beat topic similarity at this data size.** The multi-step, length and numeric features got positive weights. The leave-one-out kNN vote came out *negative*: with 30 points, a query's nearest neighbours are often off-topic. The kNN signal should improve with calibration size.
-5. **A 1B model can't judge its own competence.** Its self-rated confidence carried no signal (weight near zero on the first fit, wrong-signed on the second), and it adds about 0.5 s of routing overhead. It is a candidate for removal.
+5. **A 1B model can't judge its own competence.** Its self-rated confidence carries no useful signal (the weight is small and wrong-signed) and adds about 0.5 s of routing overhead. It is a candidate for removal.
 6. **Weak-model failures are partly unpredictable.** The 1B model failed a grammar fix (b05) and a factual question (b03) that look trivially easy. No text-only router will catch those. Only calibration coverage or a cheap post-hoc check will.
-7. **Class balancing is essential.** Strong wins are the minority class, so an unweighted fit gets 67% accuracy by always predicting "weak". That's what the v2 run did.
+7. **Class balancing is essential.** Strong wins are the minority class, so an unweighted fit gets 67% accuracy by always predicting "weak" and routes everything to the 1B model.
 
 ## Caveats
 
 - **Small sample.** 15 benchmark queries means one query changes quality by about 6.7%. Treat the numbers as directional.
 - **Threshold chosen on the test set.** The 0.3 threshold was picked by sweeping the held-out set, which is optimistic. The default in config stays at 0.5. A proper setup needs a separate validation split, which needs more data.
 - **Judge self-bias.** The strong model grades its own answers. `JUDGE_MODEL` can point at an independent model.
-- **Test-set replay.** The logistic model was refit after v2 ran, then replayed with `sweep --rescore` on v2's stored features. Since the fit uses only calibration data, this is legitimate. The weights shown are exactly what a fresh `benchmark` would use.
+- **Replayed router scores.** The router rows come from `sweep --rescore` on stored benchmark features. The fit uses only calibration data, so this matches what a fresh `benchmark` with the same model would produce.
 - **CPU-only hardware.** On a GPU, the 1B-vs-8B speed gap and therefore the savings would likely be much larger than the 1.5× measured here.
 
 ## Scorecard

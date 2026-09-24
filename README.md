@@ -11,50 +11,47 @@ No API keys, no cloud accounts.
 
 ## Why
 
-Sending every request to your largest model wastes compute. Many queries ("capital of France?",
-"sum a list in Python") are answered just as well by a model that's 5 to 10x cheaper. Others
-(concurrency bugs, multi-step math) aren't. A static rule can't tell them apart. A router that
-remembers how each model did on queries like this one can.
+Sending every request to your largest model wastes compute when a small model would answer just
+as well. But how much routing can save depends on your traffic: if the queries a small model can
+handle are also the cheap ones, even a perfect router saves little. mdb-steer measures both
+things, the **ceiling** (an oracle router) and how much of it a real router **captures**.
 
 ## How it works
 
 ```
-                    query
-                      │
-                      ▼
-        ┌──────────────────────────┐
-        │ embed (nomic-embed-text) │
-        └────────────┬─────────────┘
-                     ▼
-        ┌──────────────────────────┐       calibration collection:
-        │ Atlas $vectorSearch k-NN │◄──────  { query, embedding,
-        └────────────┬─────────────┘         scores: {strong, weak} }
-                     ▼
-     P(strong wins) = similarity-weighted share of neighbours
-                      where strong beat weak by > margin
-                     │
-         ≥ threshold │ < threshold
-          ┌──────────┴──────────┐
-          ▼                     ▼
-     strong model           weak model
-          └──────────┬──────────┘
-                     ▼
-            telemetry → MongoDB
+                        query text
+                            │
+          ┌─────────────────┼──────────────────┐
+          ▼                 ▼                  ▼
+   embed → Atlas      difficulty text     weak model's
+   $vectorSearch      features (multi-     self-rated
+   k-NN vote          step, length, nums)  confidence
+          └─────────────────┼──────────────────┘
+                            ▼
+            logistic model (fitted on calibration)
+                            ▼
+                     P(strong wins)
+             ≥ threshold    │    < threshold
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+        strong model                 weak model
+              └─────────────┬─────────────┘
+                            ▼
+                   telemetry → MongoDB
 ```
 
-1. **Calibrate.** Run *both* models on a labelled calibration set. An LLM judge grades each
-   answer against a reference (0 to 1). Store the query embedding and both scores in MongoDB and
-   build an Atlas Vector Search index over them.
-2. **Route.** Combine a few signals into P(strong wins) with a class-balanced logistic model
-   fitted on the calibration set:
-   - the similarity-weighted share of the k nearest calibration neighbours (`$vectorSearch`)
-     where the strong model won by more than `ROUTER_WIN_MARGIN`;
+1. **Calibrate.** Run *both* models on a calibration set. An LLM judge gives each answer a
+   verdict against a reference (CORRECT 1.0 / PARTIAL 0.5 / INCORRECT 0.0). Store the query
+   embedding and both scores in MongoDB, build an Atlas Vector Search index, and fit the router.
+2. **Route.** Combine these signals into P(strong wins) with a class-balanced logistic model:
+   - the similarity-weighted share of the k nearest calibration queries where the strong model
+     won by more than `ROUTER_WIN_MARGIN`;
    - text difficulty features: multi-step wording, length, numbers;
    - the weak model's self-rated confidence (optional; its compute is charged to the router).
 
-   The router sees **only the query text**. No difficulty labels.
+   The router sees **only the query text**.
 3. **Benchmark.** On a **held-out** set, route each query *and* run both models, so the router can
-   be compared honestly against every alternative:
+   be compared against every alternative:
 
 | strategy     | meaning                                                              |
 | ------------ | -------------------------------------------------------------------- |
@@ -62,11 +59,11 @@ remembers how each model did on queries like this one can.
 | `all_weak`   | cost floor                                                           |
 | `router`     | mdb-steer                                                            |
 | `random`     | expected result of offloading the *same share* of traffic at random  |
-| `oracle`     | cheapest model achieving the best score per query (upper bound)      |
+| `oracle`     | cheapest model achieving the best score per query (savings ceiling)  |
 
-   The number that matters is **lift over random**. If the router can't beat random routing at
-   the same offload rate, it isn't learning anything. The run exits non-zero if the quality drop
-   vs. `all_strong` exceeds `QUALITY_GUARDRAIL_PCT`, so it can gate CI or a deploy.
+   Check the `oracle` first: it's the most routing can save on this traffic. Then **lift over
+   random** shows whether the router is learning anything. The run exits non-zero if the quality
+   drop vs. `all_strong` exceeds `QUALITY_GUARDRAIL_PCT`, so it can gate CI or a deploy.
 
 **Measured, not assumed.** Cost is Ollama's server-reported compute time (prompt eval +
 generation, *excluding* model load) × `GPU_COST_PER_HOUR`. Token counts come from Ollama. Compose
@@ -78,13 +75,13 @@ On 15 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`), the router be
 routing at every threshold from 0.1 to 0.6. At threshold 0.3 it passes a 5% quality guardrail
 while sending 33% of traffic to the 1B model. The saving is small (4.9%), because on this
 workload **even an oracle router saves only 14.7%**: the easy queries are also the cheap ones.
-See [review.md](review.md) for the full results and caveats, and [blog.md](blog.md) for the story.
+See [review.md](review.md) for the full results and caveats, and [blog.md](blog.md) for why the oracle matters.
 
 ## Quickstart
 
 ```bash
 docker compose up -d mongodb ollama
-docker compose run --rm app calibrate      # first run pulls models (~6 GB)
+docker compose run --rm app calibrate      # pulls models on first run (~6 GB), then fits the router
 docker compose run --rm app benchmark
 docker compose run --rm app sweep --rescore  # cost/quality curve, no model calls
 docker compose run --rm app route "Implement a lock-free queue in C++" --answer
@@ -105,8 +102,8 @@ Results depend on your hardware and models. Every run is stored, so you can comp
 
 | collection       | contents                                                                                        |
 | ---------------- | ----------------------------------------------------------------------------------------------- |
-| `calibration`    | one doc per calibration query: embedding, per-model scores, full answers, judge reasons. Vector-indexed. |
-| `telemetry`      | one doc per routed query: decision, p_strong, neighbours used, and both models' attempts         |
+| `calibration`    | one doc per calibration query: embedding, per-model scores, full answers, judge verdicts. Vector-indexed. |
+| `telemetry`      | one doc per routed query: decision, p_strong, features, neighbours used, both models' attempts  |
 | `router_models`  | every fit: feature weights, standardisation, training rows, train accuracy                      |
 | `benchmark_runs` | run summary: every strategy's quality / cost / offload, guardrail verdict, settings snapshot     |
 
@@ -128,7 +125,7 @@ All settings are environment variables (see `mdb_steer/config.py`):
 | `ROUTER_WIN_MARGIN`     | `0.1`              | how much strong must beat weak to count as a win |
 | `ROUTER_SELF_CONFIDENCE`| `true`             | use the weak model's self-confidence as a feature |
 | `ROUTER_L2`             | `0.01`             | regularisation for the logistic combiner        |
-| `GPU_COST_PER_HOUR`     | `1.00`             | prices measured GPU time                        |
+| `GPU_COST_PER_HOUR`     | `1.00`             | prices measured model compute time              |
 | `QUALITY_GUARDRAIL_PCT` | `5.0`              | max allowed quality drop vs. all-strong         |
 
 Other commands: `fit` refits the router, and `regrade` re-judges stored calibration answers after a
@@ -153,8 +150,8 @@ docker compose run --rm app sweep --rescore   # re-evaluate with the latest fitt
 ```
 mdb_steer/
   config.py    settings from env
-  llm.py       Ollama client (chat + embeddings, measured latency/usage)
-  judge.py     LLM-as-judge grading against a reference
+  llm.py       Ollama native-API client (chat, embeddings, server-side timings)
+  judge.py     LLM judge: categorical verdict against a reference
   store.py     MongoDB collections + Atlas Vector Search index
   features.py  difficulty features, self-confidence, logistic fit
   router.py    feature extraction, routing decision, fitting
