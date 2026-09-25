@@ -153,7 +153,7 @@ docker compose run --rm app sweep --rescore   # re-evaluate with the latest fitt
 ## Known limitations
 
 - **Judge bias.** By default the strong model grades itself. Set `JUDGE_MODEL` to an independent model for fairer scores.
-- **Sample size.** 45 benchmark queries give wide error bars; a couple of queries can flip a guardrail result.
+- **Sample size.** 45 benchmark queries give wide error bars; a couple of queries can flip a guardrail result ([#2](https://github.com/ranfysvalle02/mdb-steer/issues/2)).
 - **CPU hardware.** Results were measured on CPU, where the 1B model is only modestly cheaper than the 8B. A GPU changes the savings ceiling.
 - **Benchmark cost.** The benchmark runs both models on every query so all strategies can be compared. Production routing runs only the chosen model.
 

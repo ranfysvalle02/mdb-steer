@@ -7,8 +7,8 @@ incoming query we compute:
   - text difficulty features (multi-step wording, length, numbers);
   - weak_uncertainty: the weak model's own low confidence (optional, costs one short call).
 
-A logistic model fitted on the calibration set turns these into P(strong needed), `p_strong`. Nothing about the
-incoming query's difficulty is given to the router: it only sees the text.
+A logistic model fitted on the calibration set turns these into P(strong needed), `p_strong`.
+Nothing about the incoming query's difficulty is given to the router: it only sees the text.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ class Router:
             y.append(int(needs_strong(doc["scores"], s)))
             router_ms.append(compute_ms)
 
-        # Out-of-fold P(strong wins) for every calibration query.
+        # Out-of-fold P(strong needed) for every calibration query.
         oof = [0.0] * len(docs)
         for fold in range(s.cv_folds):
             train = [i for i in range(len(docs)) if i % s.cv_folds != fold]

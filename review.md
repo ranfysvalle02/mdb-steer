@@ -99,7 +99,7 @@ The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated a
 ## Path to 10
 
 1. **A GPU host run.** This is the biggest lever: it tests factor 2 of the ceiling directly.
-2. **200+ benchmark queries,** with confidence intervals (bootstrap over queries) on every reported number.
+2. **200+ benchmark queries,** with confidence intervals (bootstrap over queries) on every reported number ([#2](https://github.com/ranfysvalle02/mdb-steer/issues/2)).
 3. **Judge audit:** an independent judge model plus about 50 human-graded answers to measure the judge's accuracy.
 4. **A cascade baseline:** try the 1B first and escalate on a cheap check. Compare it with prediction-only routing.
 5. **An integration test** that runs a tiny calibrate → fit → benchmark against the Docker stack in CI.

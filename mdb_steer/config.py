@@ -22,7 +22,7 @@ class Settings:
     # Defaults to the strong model. Point this at a third model to avoid self-grading bias.
     judge_model: str = field(default_factory=lambda: _env("JUDGE_MODEL", _env("STRONG_MODEL", "llama3.1:8b")))
 
-    # Route to the strong model when P(strong wins) >= threshold. Unset: use the threshold `fit`
+    # Route to the strong model when P(strong needed) >= threshold. Unset: use the threshold `fit`
     # selected by cross-validation on the calibration set (never tuned on the benchmark).
     threshold: float | None = field(
         default_factory=lambda: float(os.environ["ROUTER_THRESHOLD"]) if os.getenv("ROUTER_THRESHOLD") else None

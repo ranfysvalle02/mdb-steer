@@ -1,4 +1,4 @@
-"""Command-line entry point: `python -m mdb_steer {calibrate,benchmark,route}`."""
+"""Command-line entry point: `python -m mdb_steer {calibrate,regrade,fit,benchmark,sweep,route}`."""
 
 from __future__ import annotations
 
