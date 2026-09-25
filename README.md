@@ -97,7 +97,8 @@ cloud-pricing tables come from stored data via `python scripts/blog_stats.py` (n
 (plain-language story), [blog.md](blog.md) (technical write-up), [review.md](review.md) (full
 results, CIs and caveats).
 Comparing routers? [routellm.md](routellm.md) summarises the RouteLLM paper, and
-[mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md) compares the two approaches.
+[mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md) compares the two approaches, with a keyless head-to-head
+(`python scripts/compare_routellm.py`).
 
 ## Quickstart
 

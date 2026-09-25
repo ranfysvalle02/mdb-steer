@@ -152,25 +152,43 @@ you can actually learn, and a combiner on top.
 | Specialised domain with a clear definition of correct | **mdb-steer**, or RouteLLM retrained on your labels |
 | Need a CI gate on quality | **mdb-steer** guardrail |
 | Need an OpenAI-compatible routing proxy | **RouteLLM** server (optionally wrapping a router trained with mdb-steer) |
-| Want to know which router is better on *your* traffic | **mdb-steer's harness with RouteLLM as a strategy** (see §6) |
+| Want to know which router is better on *your* traffic | `scripts/compare_routellm.py` (see §6) |
 
-## 6. How to combine them
+## 6. How to combine them: the measured comparison
 
-mdb-steer already stores both models' graded answers for every benchmark query. So RouteLLM can be evaluated
-as another strategy **with no new model calls**:
+[`scripts/compare_routellm.py`](scripts/compare_routellm.py) scores RouteLLM's pre-trained routers on a
+stored benchmark run and compares them with mdb-steer on **the same graded, priced answers**. It makes **no LLM
+calls and needs no API key**:
 
-1. For each stored benchmark query, compute `routellm_score = router.calculate_strong_win_rate(query)`
-   using the local `bert` router, so the no-keys setup stays intact. `mf` is an option if you have a key.
-2. Sweep `α` over a grid. At each `α`, pick strong or weak per query and total up the **stored** cost and
-   quality, exactly as `sweep` does for mdb-steer's router.
-3. Report RouteLLM next to `all_strong`, `all_weak`, `random`, `router` and `hindsight`, as a
-   savings-vs-quality curve plus the value at the guardrail.
-4. Optionally also report PGR/APGR for mdb-steer's router, so the results can be compared with RouteLLM's paper.
+```bash
+pip install -e ".[routellm]"
+python scripts/compare_routellm.py --ratios 5,10,20     # bert: local, keyless
+python scripts/compare_routellm.py --routers bert,mf    # mf: needs OpenAI or Azure OpenAI embeddings
+```
 
-Possible outcomes, all worth publishing:
-- **RouteLLM ≈ mdb-steer:** a generic difficulty signal is enough, so skip the calibration work.
-- **mdb-steer > RouteLLM:** grading your own traffic pays off.
-- **Both far below hindsight:** a better router is possible but may not be worth it. Check the ceiling again.
+It loads RouteLLM's Hugging Face checkpoints directly instead of importing `routellm`, because that
+package creates an `OpenAI()` client at import time and fails without a key, even for the local BERT
+router. The scoring logic is RouteLLM's own. Scores are cached in the `routellm_scores` collection.
+
+### Results (45 held-out queries, `llama3.1:8b` vs `llama3.2:1b`)
+
+| | mdb-steer | RouteLLM `bert` |
+|---|---|---|
+| AUC for "weak model fails" (threshold-free) | **0.787** | 0.617 |
+| best point within 5% guardrail, CPU cost | 24% offload, **8.6%** saving, 3.8% drop | 24% offload, 5.6% saving, 3.8% drop |
+| same, per-token pricing, weak 10× cheaper | **16.1%** saving | 12.9% saving |
+| thresholds beating random at the same offload | 81 / 92 | 74 / 99 |
+| hindsight ceiling (CPU / 10×) | 17.8% / 54.5% | 17.8% / 54.5% |
+
+What this shows:
+- **RouteLLM `bert` works on day one, with no calibration data:** it beats random routing and passes the guardrail.
+- **mdb-steer, fitted on 150 of your own graded queries, ranks better** (AUC 0.79 vs 0.62) and saves
+  about 3 points more at the same offload and quality. At equal offload, it sends away queries that cost more.
+- **Both are far below the ceiling.** Neither captures more than a third of the hindsight saving. The ceiling
+  and the share of hard queries still decide the outcome more than the choice of router.
+- Caveat: with 45 queries, one query moves offload by 2.2 points. The two routers offload different
+  queries (only 5 of 11 overlap), and their equal quality drop is a coincidence of the discrete grades.
+  Treat the gap as suggestive until [#2](https://github.com/ranfysvalle02/mdb-steer/issues/2) grows the benchmark.
 
 Other ways to combine them: use RouteLLM's score as **another feature** in mdb-steer's logistic model, or
 serve mdb-steer's router behind RouteLLM's server by implementing `calculate_strong_win_rate` on top of `Router.route`.
@@ -224,20 +242,18 @@ Taken from [review.md](review.md) (`llama3.1:8b` vs `llama3.2:1b`, CPU, 150 cali
 The gap between 64% offload and 17.8% saving is the clearest example of why counting strong-model calls
 overstates savings.
 
-### D. Evaluation sketch
+### D. How the comparison script works
 
-```python
-# scripts/compare_routellm.py (sketch; not yet in the repo)
-from routellm.routers.routers import ROUTER_CLS   # check import path against the installed version
+For each router, `p_strong` is attached to every stored benchmark row. The script sweeps thresholds over a
+fixed grid plus every observed score (RouteLLM scores cluster in about 0.2 to 0.8), and for each threshold replays
+the rows through mdb-steer's own `summarize` (cost, quality drop, lift over random, guardrail). It
+then reports the best passing point per router. Token-priced tables reuse `blog_stats.py`'s pricing
+(output tokens 3× input, weak model N× cheaper).
 
-router = ROUTER_CLS["bert"]()                    # local, no API key
-rows = load_latest_benchmark_telemetry()         # query, strong/weak attempts (score, cost)
-scores = [router.calculate_strong_win_rate(r["query"]) for r in rows]
-
-for alpha in [i / 20 for i in range(21)]:
-    picks = [r["strong"] if s >= alpha else r["weak"] for r, s in zip(rows, scores)]
-    report(alpha, cost=sum(p["cost"] for p in picks), quality=mean(p["score"] for p in picks))
-```
+- `bert`: `routellm/bert_gpt4_augmented`, 3-way classifier; `P(strong) = 1 − P(tie) − P(weak wins)`.
+- `mf`: `routellm/mf_gpt4_augmented`, scoring the GPT-4 vs Mixtral pair from its training vocabulary,
+  on `text-embedding-3-small` embeddings from OpenAI (`OPENAI_API_KEY`) or Azure OpenAI
+  (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_EMBED_DEPLOYMENT`).
 
 ### E. References
 

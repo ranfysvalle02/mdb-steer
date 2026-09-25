@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
+# scripts/compare_routellm.py; add "openai" for the mf router
+routellm = ["torch", "transformers", "huggingface_hub", "safetensors"]
 
 [project.scripts]
 mdb-steer = "mdb_steer.cli:main"
