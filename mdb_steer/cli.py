@@ -10,7 +10,7 @@ from typing import Any
 
 from mdb_steer.config import Settings
 from mdb_steer.llm import Ollama
-from mdb_steer.pipeline import log_fit, benchmark, calibrate, regrade, sweep
+from mdb_steer.pipeline import benchmark, calibrate, log_fit, regrade, sweep
 from mdb_steer.router import Router
 from mdb_steer.store import Store
 
@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_cal = sub.add_parser("calibrate", help="run both models on the calibration set and build the vector index")
     p_cal.add_argument("--data", type=Path, default=Path("data/calibration.jsonl"))
+    p_cal.add_argument("--force", action="store_true", help="re-run items that are already calibrated")
 
     p_regrade = sub.add_parser("regrade", help="re-judge stored calibration answers with the current judge")
     p_regrade.add_argument("--data", type=Path, default=Path("data/calibration.jsonl"))
@@ -51,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "calibrate":
         print(f"Calibrating {settings.strong_model} vs {settings.weak_model} (judge: {settings.judge_model})")
-        n = calibrate(store, llm, settings, args.data)
+        n = calibrate(store, llm, settings, args.data, force=args.force)
         print(f"Indexed {n} calibration queries.")
         return 0
 
@@ -66,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "benchmark":
-        print(f"Benchmarking router (threshold={settings.threshold}, k={settings.k})")
+        threshold = settings.threshold if settings.threshold is not None else "cross-validated"
+        print(f"Benchmarking router (threshold={threshold}, k={settings.k})")
         summary = benchmark(store, llm, settings, args.data)
         _print_report(summary)
         return 0 if summary["passed"] else 1

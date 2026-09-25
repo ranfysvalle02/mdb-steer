@@ -6,83 +6,91 @@
 
 LLM routing sounds like an easy win. Most queries don't need your biggest model, so send "What's the capital of Japan?" to a 1B model and save the 8B for Dijkstra and Raft. Cost goes down and quality stays the same.
 
-We built a router to test this, measured it properly, and found something more useful than a good-looking benchmark number:
+We built a router to test this, measured it on 150 calibration and 45 held-out queries, and found something more useful than a good-looking benchmark number:
 
-> **How much routing can save is decided by your traffic, not your router.**
-> Measure the oracle before you build anything.
+> **How much routing can save is decided before you train a router.** It depends on how much of
+> your cost sits in queries the small model can handle, and on how much cheaper the small model
+> really is on your hardware. Measure the oracle first.
 
 ## The oracle
 
 The **oracle** is a router with perfect hindsight. For every query it picks the cheapest model that still gets the best score. No real router can beat it, so the oracle's savings are the most routing can ever achieve on a workload.
 
-You can compute it cheaply. Run both models on a sample of your traffic, grade the answers, and for each query take the cheaper model whenever it scored as well as the expensive one.
+It's cheap to compute. Run both models on a sample of your traffic, grade the answers, and for each query take the cheaper model whenever it did as well as the expensive one.
 
-Here's what we measured on 15 held-out queries spanning facts, rewrites, code, math and reasoning, with `llama3.1:8b` as the strong model and `llama3.2:1b` as the weak one:
+On 45 held-out queries spanning facts, rewrites, code, math, reasoning and long "easy but wordy" tasks, with `llama3.1:8b` as the strong model and `llama3.2:1b` as the weak one:
 
 | strategy | quality | cost | sent to 1B |
 |---|---|---|---|
-| all-strong | 0.900 | $0.169 | 0% |
-| all-weak | 0.567 | $0.092 | 100% |
-| **oracle** | **0.900** | **$0.144** | **47%** |
+| all-strong | 0.878 | $0.346 | 0% |
+| all-weak | 0.611 | $0.218 | 100% |
+| **oracle** | **0.889** | **$0.284** | **64%** |
 
-The oracle keeps full quality while sending almost half the traffic to the 1B model.
+The oracle sends almost two-thirds of the traffic to the 1B model and quality goes *up* slightly, because the small model is sometimes the one that gets it right.
 
-**It saves only 14.7%.**
+**It saves only 17.8%.**
 
-## Why half the traffic is only 15% of the cost
+## Two factors set the ceiling
 
-The queries a 1B model gets right, like "capital of Japan?", "translate 'thank you'" or "25% of 80", have **short answers**. They're cheap on *any* model, so moving them saves almost nothing.
+Break the oracle down by query type and both factors show up:
 
-The expensive queries produce long answers: a 500-token Dijkstra implementation, an explanation of Raft leader election, a Bloom filter with its failure modes. Those are exactly the queries the 1B model gets wrong. **On this workload, answer length and difficulty go together**: the same queries are both costly and hard. Routing saves the most when easy queries are also expensive, and here they aren't.
+| category | 1B was good enough | oracle saves |
+|---|---|---|
+| factual | 5 / 7 | 50.8% |
+| long_easy (summaries, rewrites, extraction) | **6 / 6** | 26.1% |
+| reasoning | 3 / 8 | 19.2% |
+| rewrite | 4 / 6 | 16.5% |
+| coding | 8 / 10 | 15.1% |
+| math | 3 / 8 | 3.6% |
 
-That changes the question. It isn't "how good is my router?" but "how much of my cost sits in queries a small model can handle?" If your traffic is mostly short Q&A, the ceiling is low. If it includes expensive easy work, like summarising long documents, drafting emails, rewriting long text or extracting fields from big inputs, the ceiling rises and a router becomes worth building.
+**Factor 1: where the cost is.** Math and reasoning produce long, expensive answers, and the 1B mostly gets them wrong, so that cost can't move. The queries the 1B handles well tend to be the cheap ones.
 
-## The router: capturing what's available
+**Factor 2: how much cheaper the small model really is.** Look at long_easy. The 1B handled *every* summary, rewrite and extraction task, yet the oracle saves only 26%. On this hardware (CPU, in Docker) the 1B is only about 1.35× cheaper per query on those tasks, and sending all traffic to it saves just 36.9%. A model 8× smaller isn't 8× cheaper when your hardware can't take advantage of the difference.
 
-With the ceiling known, the question is how much of it a real router can get. mdb-steer's router sees only the query text and combines four kinds of signal:
+So routing savings ≈ (share of cost in queries the small model can handle) × (the small model's real per-query cost gap). The router can't change either factor. Measure both before you build one.
 
-- **Neighbour vote.** `$vectorSearch` finds the most similar calibration queries, where both models were run and graded. It returns the similarity-weighted share where the strong model clearly won.
-- **Difficulty wording.** Words like "explain", "implement", "probability", "how many", "at least".
-- **Shape.** Query length, and whether it contains numbers.
-- **Self-confidence.** The 1B model's rating of whether it can answer.
+## What the router captures
 
-A class-balanced logistic model fitted on the calibration set combines these into P(strong wins). Sweeping the threshold on held-out queries:
+mdb-steer's router sees only the query text. It combines a **neighbour vote** (`$vectorSearch` over graded calibration queries) with a few text features in a class-balanced logistic model, and picks its threshold by cross-validation on the calibration set, never on the benchmark.
+
+On the held-out set:
 
 | threshold | sent to 1B | savings | quality drop | vs. random routing |
 |---|---|---|---|---|
-| 0.2 | 20% | 1.1% | 0.0% | +0.067 |
-| **0.3** | **33%** | **4.9%** | **3.7%** | **+0.078** |
-| 0.4 | 40% | 11.2% | 7.4% | +0.067 |
-| 0.5 | 53% | 15.9% | 14.8% | +0.044 |
+| 0.35 | 18% | 5.4% | 3.8% | +0.014 |
+| **0.40** | **24%** | **8.6%** | **3.8%** | **+0.032** |
+| 0.45 *(chosen by cross-validation)* | 38% | 13.3% | 7.6% | +0.034 |
+| 0.50 | 56% | 18.2% | 7.6% | +0.081 |
 
-The router beats random routing at every threshold from 0.1 to 0.6, so it's picking up real signal. At 0.3 it stays inside a 5% quality guardrail while sending a third of traffic to the 1B model. That captures about a third of the oracle's 14.7%. It's a small result, but it's measured.
+It beats random routing at every threshold up to 0.65, so it's picking up real signal. At 0.40 it captures about half of the oracle's savings within a 5% quality budget. The threshold cross-validation picked (0.45) predicted a 4.5% quality drop and delivered 7.6% on held-out data, which shows how noisy 45 queries still are. Treat these numbers as directional.
 
-## What the signals told us
+## The label matters more than the features
 
-**Difficulty wording beat semantic similarity.** Multi-step wording, length and numbers all got positive weights. The neighbour vote came out negative: with only 30 calibration queries, a query's nearest neighbours are often on a different topic. Embedding similarity tells you *what a query is about*, not *how hard it is*, and it only helps once there's enough nearby data ([#1](https://github.com/ranfysvalle02/mdb-steer/issues/1)).
+The biggest improvement didn't come from a new feature. It came from changing what the router is asked to predict.
 
-**A 1B model can't judge its own competence.** Its self-rated confidence carried no signal and added about half a second per query.
+We first trained it on "did the strong model beat the weak one?". With 150 calibration queries, every signal we had predicted that label at about chance (AUC ≈ 0.50). The label is the difference of two noisy judge verdicts, and it treats "both models failed" the same as "easy query".
 
-**Some failures can't be predicted from the text.** The 1B model got a basic grammar fix and a simple factual question wrong. No text-only router will catch those. Calibration coverage, or a cheap check after the answer, might.
+Switching the label to **"did the weak model fail?"**, a single verdict, made the neighbour vote a real signal (AUC ≈ 0.65). The same embeddings and the same data, just a better question. With the old label, the router routed worse than random. With the new one it beats random at every threshold up to 0.65.
+
+A related warning: on our first 30 calibration queries, text features looked predictive. At 150 they weren't. A small calibration set can make a feature look useful when it's noise.
 
 ## Details that make the numbers trustworthy
 
-A few details decide whether routing numbers are real:
-
-- **Use categorical verdicts, not scales.** An 8B judge scoring 0–10 gave 8/10 to an answer of 30 for the arrangements of "BANANA" (the correct answer is 60). Asking for CORRECT, PARTIAL or INCORRECT on the final answer fixed that.
-- **Count compute, not wall-clock time.** When several models share one Ollama instance they push each other out of memory, and latency ends up measuring loading. Keep them all loaded (`OLLAMA_MAX_LOADED_MODELS`) and price Ollama's reported generation time, not elapsed time.
-- **Balance the classes.** Strong-model wins are the minority. An unweighted fit learns to always answer "weak" and still looks accurate.
-- **Compare against random routing at the same offload rate.** Offloading 33% of traffic always saves money. The question is whether it loses less quality than choosing that 33% at random.
+- **Use categorical verdicts, not scales.** An 8B judge scoring 0–10 gave 8/10 to an answer of 30 for the arrangements of "BANANA" (the correct answer is 60). CORRECT, PARTIAL or INCORRECT on the final answer fixed that.
+- **Count compute, not wall-clock time.** When several models share one Ollama instance they push each other out of memory, and latency ends up measuring loading. Keep them all loaded and price Ollama's reported generation time.
+- **Balance the classes.** Otherwise the fit learns to always answer the majority class.
+- **Choose thresholds without looking at the test set,** and report when the held-out result misses the prediction.
+- **Compare against random routing at the same offload rate.** Offloading always saves money. The question is whether it loses less quality than choosing the same share at random.
 
 ## Why everything lives in MongoDB
 
-Every answer, verdict, embedding, routing feature and fitted model is stored in MongoDB: `calibration` (vector-indexed), `telemetry`, `router_models` and `benchmark_runs`. That makes the expensive part, running models, a one-time cost:
+Every answer, verdict, embedding, routing feature, neighbour list and fitted model is stored in MongoDB: `calibration` (vector-indexed), `telemetry`, `router_models` and `benchmark_runs`. Running the models is the expensive part, so storing everything makes it a one-time cost:
 
 - **Change the judge?** `regrade` re-grades stored answers.
-- **Change the router?** `fit`, then `sweep --rescore` replays stored features against the held-out set.
+- **Change the label or features?** `fit`, then `sweep --rescore` recomputes the neighbour vote from the stored neighbour lists and replays the held-out set.
 - **Change the threshold?** `sweep` traces the full cost/quality curve.
 
-None of these call the models again. On a laptop running CPU inference, that's what makes iterating in minutes practical.
+The label switch above was tested this way, in seconds, on hours' worth of stored inference.
 
 ## Try it on your traffic
 
@@ -96,4 +104,4 @@ docker compose run --rm app benchmark
 docker compose run --rm app sweep --rescore
 ```
 
-Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `oracle` row first. If the oracle doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.
+Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `oracle` and `all_weak` rows first. If the oracle doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.

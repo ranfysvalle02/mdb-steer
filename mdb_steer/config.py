@@ -22,15 +22,25 @@ class Settings:
     # Defaults to the strong model. Point this at a third model to avoid self-grading bias.
     judge_model: str = field(default_factory=lambda: _env("JUDGE_MODEL", _env("STRONG_MODEL", "llama3.1:8b")))
 
-    # Route to the strong model when P(strong wins) >= threshold.
-    threshold: float = field(default_factory=lambda: float(_env("ROUTER_THRESHOLD", "0.5")))
+    # Route to the strong model when P(strong wins) >= threshold. Unset: use the threshold `fit`
+    # selected by cross-validation on the calibration set (never tuned on the benchmark).
+    threshold: float | None = field(
+        default_factory=lambda: float(os.environ["ROUTER_THRESHOLD"]) if os.getenv("ROUTER_THRESHOLD") else None
+    )
     # Number of calibration neighbours consulted per query.
     k: int = field(default_factory=lambda: int(_env("ROUTER_K", "5")))
-    # The strong model "wins" a calibration query only if it beats the weak model by more than this (0-1 scale).
+    # What the router learns to predict for each calibration query:
+    #   "weak_fails"  - the weak model's answer was not fully correct (default; one judge verdict)
+    #   "strong_wins" - strong beat weak by more than win_margin (difference of two noisy verdicts;
+    #                   on our data this label was unpredictable, AUC ~0.5)
+    router_label: str = field(default_factory=lambda: _env("ROUTER_LABEL", "weak_fails"))
     win_margin: float = field(default_factory=lambda: float(_env("ROUTER_WIN_MARGIN", "0.1")))
 
     # Ask the weak model to rate its own confidence as a routing feature (one short extra call).
-    self_confidence: bool = field(default_factory=lambda: _env("ROUTER_SELF_CONFIDENCE", "true").lower() == "true")
+    # Off by default: on our data it carried no signal and added ~0.5 s per query.
+    self_confidence: bool = field(default_factory=lambda: _env("ROUTER_SELF_CONFIDENCE", "false").lower() == "true")
+    # Folds for cross-validated threshold selection in `fit`.
+    cv_folds: int = field(default_factory=lambda: int(_env("ROUTER_CV_FOLDS", "5")))
     # L2 regularisation for the logistic combiner; keeps weights sane on small calibration sets.
     l2: float = field(default_factory=lambda: float(_env("ROUTER_L2", "0.01")))
 

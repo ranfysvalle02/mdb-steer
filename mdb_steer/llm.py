@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import httpx
 
 _NS_PER_MS = 1_000_000
+_RETRIES = 4  # a killed runner (e.g. memory pressure) is restarted by Ollama on the next request
 
 
 @dataclass(frozen=True)
@@ -52,10 +53,8 @@ class Ollama:
             body["format"] = "json"
 
         start = time.perf_counter()
-        res = self._http.post("/api/chat", json=body)
-        res.raise_for_status()
+        data = self._post("/api/chat", body)
         latency_ms = (time.perf_counter() - start) * 1000
-        data = res.json()
 
         return Completion(
             model=model,
@@ -68,6 +67,20 @@ class Ollama:
         )
 
     def embed(self, model: str, text: str) -> list[float]:
-        res = self._http.post("/api/embed", json={"model": model, "input": text, "keep_alive": -1})
-        res.raise_for_status()
-        return res.json()["embeddings"][0]
+        return self._post("/api/embed", {"model": model, "input": text, "keep_alive": -1})["embeddings"][0]
+
+    def _post(self, path: str, body: dict) -> dict:
+        """POST with exponential backoff on server errors and dropped connections."""
+        for attempt in range(_RETRIES + 1):
+            try:
+                res = self._http.post(path, json=body)
+                if res.status_code < 500:
+                    res.raise_for_status()
+                    return res.json()
+                error: Exception = httpx.HTTPStatusError(f"{res.status_code} from {path}", request=res.request, response=res)
+            except httpx.TransportError as exc:
+                error = exc
+            if attempt == _RETRIES:
+                raise error
+            time.sleep(2 ** (attempt + 1))
+        raise AssertionError("unreachable")

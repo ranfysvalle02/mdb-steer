@@ -14,6 +14,10 @@ from mdb_steer.llm import Completion, Ollama
 
 FEATURES = ("knn_p_strong", "multi_step", "length", "numeric", "weak_uncertainty")
 
+
+def feature_names(self_confidence: bool) -> list[str]:
+    return [f for f in FEATURES if self_confidence or f != "weak_uncertainty"]
+
 # Wording that tends to signal multi-step reasoning, derivation, or non-trivial code.
 _MULTI_STEP = re.compile(
     r"\b(explain|why|implement|design|prove|derive|optimi[sz]e|compare|step|steps|how many|"
