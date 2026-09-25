@@ -1,5 +1,22 @@
 # mdb-steer
 
+---------
+
+```
+The best angle to evaluate RouteLLM against alternatives is to look beyond raw theoretical cost savings and evaluate the system across **five core operational dimensions**:
+
+* **Routing Topology (Binary vs. Multi-Model Matrix):** RouteLLM (developed by LMSYS) is fundamentally designed around a **binary strong vs. weak model pair** (e.g., routing between Claude 3.5 Sonnet and Llama 3 8B based on difficulty thresholds). If your stack requires routing across five specialized models (e.g., code to Sonnet, math to DeepSeek, quick summaries to Flash), alternatives like NotDiamond, Inferbase, or custom LiteLLM rules are better built for multi-model matrices.
+* **Latency Tax vs. Classification Precision:** Every intelligent router adds a latency overhead (TTFT) to evaluate the prompt. RouteLLM uses lightweight classifier models (like matrix factorization or BERT embeddings) that add minimal overhead. However, for ultra-latency-sensitive applications, deterministic heuristics or vector-based approaches (like Semantic Router) might run in under 10ms, whereas complex ML classifiers or managed routers can add 20–50ms.
+* **Dataset Alignment (Chatbot Arena vs. Your Logs):** RouteLLM comes pre-trained on LMSYS Chatbot Arena preference data. General human preferences on MT-Bench or MMLU don't always translate to niche production tasks like strict JSON extraction, tool call generation, or domain-specific legal QA. You must evaluate whether the router allows straightforward fine-tuning or threshold calibration on your actual prompt logs.
+* **Operational Maintenance Burden (Self-Hosted Framework vs. Managed Platform):** RouteLLM is an open-source framework, meaning your team owns hosting the server, calibrating thresholds, and updating model endpoints when providers release updates. Managed solutions (Requesty, Inferbase, Portkey) charge a small markup or subscription in exchange for zero infrastructure maintenance, automatic model additions, and managed fallback chains.
+* **Classifier vs. Full API Gateway:** RouteLLM acts specifically as a classifier/decision engine, not a complete enterprise gateway. If you also need semantic caching, budget limits, user key management, and automatic retry failovers, you'll either need to pair RouteLLM with an API gateway (like LiteLLM or Portkey) or choose an all-in-one platform.
+
+What specific types of prompts or workloads make up the majority of your traffic right now?
+
+```
+
+-------
+
 **Find out how much LLM routing can save on your traffic, before you build a router, then
 measure how much of that a real router captures.**
 
