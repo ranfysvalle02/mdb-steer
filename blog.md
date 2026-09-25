@@ -1,4 +1,4 @@
-# Before You Build an LLM Router, Measure the Perfect Router
+# Before You Build an LLM Router, Measure the Ceiling
 
 *What mdb-steer, a learned router on Ollama and MongoDB Atlas Vector Search, taught us about where routing savings come from.*
 
@@ -10,7 +10,7 @@ We built a router to test this, measured it on 150 calibration and 45 held-out q
 
 > **How much routing can save is decided before you train a router.** It depends on how much of
 > your cost sits in queries the small model can handle, and on how much cheaper the small model
-> really is on your hardware. Measure the perfect-hindsight router first.
+> really is on your hardware or price sheet. Measure the ceiling, a perfect-hindsight router, first.
 
 ## The perfect-hindsight router
 
@@ -130,3 +130,5 @@ docker compose run --rm app sweep --rescore
 ```
 
 Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `hindsight` and `all_weak` rows first. If hindsight doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.
+
+For the lessons in one page, plus a decision table for "router or not?" and the cheaper levers to try first, see [key-insights.md](key-insights.md).

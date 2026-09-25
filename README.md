@@ -1,8 +1,16 @@
 # mdb-steer
 
-**A learned LLM router backed by MongoDB Atlas Vector Search.** mdb-steer decides, for each query,
-whether a small model is good enough or the large model is worth paying for. It makes that call
-from evidence: how both models actually performed on similar past queries.
+**Find out how much LLM routing can save on your traffic, before you build a router, then
+measure how much of that a real router captures.**
+
+mdb-steer runs a strong and a weak model on your queries, grades every answer, and reports two
+numbers: the **ceiling** (a perfect-hindsight router that always picks the cheapest model that's
+still right) and what a **learned router** backed by MongoDB Atlas Vector Search actually gets.
+
+> **The lesson:** routing can only save what your traffic allows. On our workload even a perfect
+> router saved just 18% on CPU and 49–57% at 5–20× cloud per-token price gaps, because the queries a
+> small model handles are the cheap ones. Measure the ceiling first.
+> → [key-insights.md](key-insights.md) has the lessons and a step-by-step playbook.
 
 It runs entirely locally with Docker: MongoDB Atlas Local (with Vector Search) plus Ollama.
 No API keys, no cloud accounts.
@@ -11,10 +19,10 @@ No API keys, no cloud accounts.
 
 ## Why
 
-Sending every request to your largest model wastes compute when a small model would answer just
-as well. But how much routing can save depends on your traffic: if the queries a small model can
-handle are also the cheap ones, even a perfect router saves little. mdb-steer measures both
-things, the **ceiling** (a perfect-hindsight router) and how much of it a real router **captures**.
+Sending every request to your largest model wastes money when a small model would answer just as
+well. But the saving depends on *where your cost is* and on *how much cheaper the small model
+really is* where you run it. mdb-steer measures both, so you know whether a router is worth
+building and whether the one you built is working.
 
 ## How it works
 
@@ -85,8 +93,9 @@ On 45 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`, 150 calibratio
 On per-token cloud pricing the ceiling rises to about 49–57% once the small model is 5–20× cheaper. Confidence intervals and the
 cloud-pricing tables come from stored data via `python scripts/blog_stats.py` (no model calls).
 
-See [review.md](review.md) for the full results and caveats, [blog.md](blog.md) for the technical
-write-up, and [blog2.md](blog2.md) for a plain-language version.
+**Read next:** [key-insights.md](key-insights.md) (lessons and what to do), [blog2.md](blog2.md)
+(plain-language story), [blog.md](blog.md) (technical write-up), [review.md](review.md) (full
+results, CIs and caveats).
 
 ## Quickstart
 

@@ -133,3 +133,5 @@ docker compose run --rm app sweep --rescore
 ```
 
 Swap in a sample of your own questions and look at the **hindsight** row first. If a perfect router would only save 10%, you have your answer, and you've saved yourself a project. If it would save 50%, build the router, and use the numbers above to check how much of that it's really getting.
+
+**Want the short version?** [key-insights.md](key-insights.md) has the lessons on one page, an afternoon test you can run on your own traffic, and a simple table for deciding whether to build a router at all.
