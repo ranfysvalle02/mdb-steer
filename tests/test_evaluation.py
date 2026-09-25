@@ -17,7 +17,7 @@ def test_summarize_strategies(settings) -> None:
     assert st["all_weak"]["quality"] == 0.5
     assert st["router"]["quality"] == 1.0 and st["router"]["offload"] == 0.5
     assert st["random"]["quality"] == pytest.approx(0.75)
-    assert st["oracle"]["offload"] == 0.5
+    assert st["hindsight"]["offload"] == 0.5
     assert summary["lift_over_random"] == pytest.approx(0.25)
     assert summary["passed"] is True
     assert summary["cost_savings_pct"] == pytest.approx(40.0)  # 2 * 1000 -> 2 * 200 of 4000

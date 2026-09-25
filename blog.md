@@ -1,4 +1,4 @@
-# Before You Build an LLM Router, Measure the Oracle
+# Before You Build an LLM Router, Measure the Perfect Router
 
 *What mdb-steer, a learned router on Ollama and MongoDB Atlas Vector Search, taught us about where routing savings come from.*
 
@@ -10,11 +10,11 @@ We built a router to test this, measured it on 150 calibration and 45 held-out q
 
 > **How much routing can save is decided before you train a router.** It depends on how much of
 > your cost sits in queries the small model can handle, and on how much cheaper the small model
-> really is on your hardware. Measure the oracle first.
+> really is on your hardware. Measure the perfect-hindsight router first.
 
-## The oracle
+## The perfect-hindsight router
 
-The **oracle** is a router with perfect hindsight. For every query it picks the cheapest model that still gets the best score. No real router can beat it, so the oracle's savings are the most routing can ever achieve on a workload.
+The **perfect-hindsight router** ("hindsight" for short) is exactly what it sounds like. For every query it picks the cheapest model that still gets the best score. No real router can beat it, so the hindsight router's savings are the most routing can ever achieve on a workload.
 
 It's cheap to compute. Run both models on a sample of your traffic, grade the answers, and for each query take the cheaper model whenever it did as well as the expensive one.
 
@@ -24,17 +24,17 @@ On 45 held-out queries spanning facts, rewrites, code, math, reasoning and long 
 |---|---|---|---|
 | all-strong | 0.878 | $0.346 | 0% |
 | all-weak | 0.611 | $0.218 | 100% |
-| **oracle** | **0.889** | **$0.284** | **64%** |
+| **hindsight** | **0.889** | **$0.284** | **64%** |
 
-The oracle sends almost two-thirds of the traffic to the 1B model and quality goes *up* slightly, because the small model is sometimes the one that gets it right.
+The hindsight router sends almost two-thirds of the traffic to the 1B model and quality goes *up* slightly, because the small model is sometimes the one that gets it right.
 
 **It saves only 17.8%.**
 
 ## Two factors set the ceiling
 
-Break the oracle down by query type and both factors show up:
+Break the hindsight router down by query type and both factors show up:
 
-| category | 1B was good enough | oracle saves |
+| category | 1B was good enough | hindsight saves |
 |---|---|---|
 | factual | 5 / 7 | 50.8% |
 | long_easy (summaries, rewrites, extraction) | **6 / 6** | 26.1% |
@@ -45,9 +45,23 @@ Break the oracle down by query type and both factors show up:
 
 **Factor 1: where the cost is.** Math and reasoning produce long, expensive answers, and the 1B mostly gets them wrong, so that cost can't move. The queries the 1B handles well tend to be the cheap ones.
 
-**Factor 2: how much cheaper the small model really is.** Look at long_easy. The 1B handled *every* summary, rewrite and extraction task, yet the oracle saves only 26%. On this hardware (CPU, in Docker) the 1B is only about 1.35× cheaper per query on those tasks, and sending all traffic to it saves just 36.9%. A model 8× smaller isn't 8× cheaper when your hardware can't take advantage of the difference.
+**Factor 2: how much cheaper the small model really is.** Look at long_easy. The 1B handled *every* summary, rewrite and extraction task, yet the hindsight router saves only 26%. On this hardware (CPU, in Docker) the 1B is only about 1.35× cheaper per query on those tasks, and sending all traffic to it saves just 36.9%. A model 8× smaller isn't 8× cheaper when your hardware can't take advantage of the difference.
 
 So routing savings ≈ (share of cost in queries the small model can handle) × (the small model's real per-query cost gap). The router can't change either factor. Measure both before you build one.
+
+### What about cloud APIs?
+
+CPU inference is the worst case for factor 2. Hosted APIs charge per token, and small models are often priced far below large ones. Re-pricing the same 45 queries by their measured token counts (output priced at 3× input) shows how the ceiling moves with the price gap:
+
+| strong : weak price per token | hindsight saves (95% CI) | all-weak saves |
+|---|---|---|
+| 1.35× (≈ our CPU) | 20% (13–29%) | 40% |
+| 2× | 33% (23–44%) | 59% |
+| 5× | 49% (33–64%) | 84% |
+| 10× | 55% (38–70%) | 92% |
+| 20× | 57% (40–75%) | 96% |
+
+A wider price gap raises the ceiling quickly, then it levels off around 55–60%. However cheap the small model gets, the roughly one-third of queries that need the strong model set a floor on cost. On cloud pricing routing can be worth much more, but factor 1 still caps it.
 
 ## What the router captures
 
@@ -62,7 +76,18 @@ On the held-out set:
 | 0.45 *(chosen by cross-validation)* | 38% | 13.3% | 7.6% | +0.034 |
 | 0.50 | 56% | 18.2% | 7.6% | +0.081 |
 
-It beats random routing at every threshold up to 0.65, so it's picking up real signal. At 0.40 it captures about half of the oracle's savings within a 5% quality budget. The threshold cross-validation picked (0.45) predicted a 4.5% quality drop and delivered 7.6% on held-out data, which shows how noisy 45 queries still are. Treat these numbers as directional.
+It beats random routing at every threshold up to 0.65, so it's picking up real signal. At 0.40 it captures about half of the hindsight router's savings within a 5% quality budget. The threshold cross-validation picked (0.45) predicted a 4.5% quality drop and delivered 7.6% on held-out data, which shows how noisy 45 queries still are. Treat these numbers as directional.
+
+**How sure are we?** Resampling the 45 queries 2,000 times (bootstrap) gives 95% intervals:
+
+| at threshold 0.40 | measured | 95% CI |
+|---|---|---|
+| hindsight saves | 17.8% | 10.0 – 27.5% |
+| router saves | 8.6% | 2.9 – 15.5% |
+| router quality drop | 3.8% | 0.0 – 10.0% |
+| lift over random | +0.032 | −0.01 – +0.08 (positive in 91% of resamples) |
+
+The saving is solid. The quality drop is inside the 5% budget in about 70% of resamples. At the cross-validated 0.45 it's inside in only 29%, so that miss is real and not bad luck. The router's saving under cloud pricing grows more slowly than the ceiling (about 15–17% at a 5–20× price gap), because at 0.40 it is conservative and offloads only 24% of traffic.
 
 ## The label matters more than the features
 
@@ -104,4 +129,4 @@ docker compose run --rm app benchmark
 docker compose run --rm app sweep --rescore
 ```
 
-Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `oracle` and `all_weak` rows first. If the oracle doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.
+Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `hindsight` and `all_weak` rows first. If hindsight doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.

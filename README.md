@@ -14,7 +14,7 @@ No API keys, no cloud accounts.
 Sending every request to your largest model wastes compute when a small model would answer just
 as well. But how much routing can save depends on your traffic: if the queries a small model can
 handle are also the cheap ones, even a perfect router saves little. mdb-steer measures both
-things, the **ceiling** (an oracle router) and how much of it a real router **captures**.
+things, the **ceiling** (a perfect-hindsight router) and how much of it a real router **captures**.
 
 ## How it works
 
@@ -61,9 +61,9 @@ things, the **ceiling** (an oracle router) and how much of it a real router **ca
 | `all_weak`   | cost floor                                                           |
 | `router`     | mdb-steer                                                            |
 | `random`     | expected result of offloading the *same share* of traffic at random  |
-| `oracle`     | cheapest model achieving the best score per query (savings ceiling)  |
+| `hindsight`  | perfect hindsight: cheapest model with the best score per query (savings ceiling) |
 
-   Check the `oracle` first: it's the most routing can save on this traffic. Then **lift over
+   Check `hindsight` first: it's the most routing can save on this traffic. Then **lift over
    random** shows whether the router is learning anything. The run exits non-zero if the quality
    drop vs. `all_strong` exceeds `QUALITY_GUARDRAIL_PCT`, so it can gate CI or a deploy.
 
@@ -75,15 +75,18 @@ keeps all models resident (`OLLAMA_MAX_LOADED_MODELS=3`) so swapping doesn't dis
 
 On 45 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`, 150 calibration queries):
 
-- **Ceiling:** the oracle sends 64% of traffic to the 1B model with no quality loss but saves
+- **Ceiling:** the perfect-hindsight router sends 64% of traffic to the 1B model with no quality loss but saves
   only **17.8%**. Sending everything to the 1B saves 36.9%. On this hardware the 1B model is only
   about 1.35–1.6× cheaper per query than the 8B.
 - **Router:** beats random routing at every threshold up to 0.65. At 0.40: 24% offload,
   **8.6%** savings, 3.8% quality drop (passes a 5% guardrail). The threshold chosen by
   cross-validation (0.45) delivered a 7.6% drop on held-out data and fails the guardrail.
 
-See [review.md](review.md) for the full results and caveats, and [blog.md](blog.md) for what
-sets the savings ceiling.
+On per-token cloud pricing the ceiling rises to about 49–57% once the small model is 5–20× cheaper. Confidence intervals and the
+cloud-pricing tables come from stored data via `python scripts/blog_stats.py` (no model calls).
+
+See [review.md](review.md) for the full results and caveats, [blog.md](blog.md) for the technical
+write-up, and [blog2.md](blog2.md) for a plain-language version.
 
 ## Quickstart
 

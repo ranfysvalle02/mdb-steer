@@ -6,18 +6,18 @@
 
 ## TL;DR
 
-- **Key finding: two factors set the savings ceiling before any router is trained.** They are the share of cost in queries the small model can handle, and how much cheaper the small model really is on your hardware. On 45 held-out queries the **oracle** sends **64%** of traffic to the 1B model and still saves only **17.8%**.
+- **Key finding: two factors set the savings ceiling before any router is trained.** They are the share of cost in queries the small model can handle, and how much cheaper the small model really is on your hardware. On 45 held-out queries the **perfect-hindsight router** sends **64%** of traffic to the 1B model and still saves only **17.8%**.
 - **The label mattered more than the features.** Predicting "did strong beat weak?" was at chance (AUC ≈ 0.50). Predicting "did the weak model fail?" gave AUC ≈ 0.65, and took the router from worse than random to better than random at every threshold up to 0.65.
-- **Router on held-out data:** at threshold 0.40, **24%** offload, **8.6%** savings, **3.8%** quality drop, **PASS**. That's about half the oracle's savings. The threshold chosen by cross-validation (0.45) predicted a 4.5% drop but delivered **7.6%** and **fails** the guardrail. We report that miss.
+- **Router on held-out data:** at threshold 0.40, **24%** offload, **8.6%** savings, **3.8%** quality drop, **PASS**. That's about half the hindsight router's savings. The threshold chosen by cross-validation (0.45) predicted a 4.5% drop but delivered **7.6%** and **fails** the guardrail. We report that miss.
 - 150 calibration and 45 benchmark queries, no overlap between them, 32 tests, CI, and it all runs locally in Docker with no API keys.
 
 ## Executive summary
 
 mdb-steer is a learned LLM router. For each query it decides whether `llama3.2:1b` is good enough or `llama3.1:8b` is needed, using only the query text: an Atlas Vector Search neighbour vote over graded calibration queries plus text features, combined by a class-balanced logistic model. The routing threshold is chosen by 5-fold cross-validation on the calibration set, so the benchmark is a true held-out test.
 
-The main result is about the workload rather than the router. Per-category oracle analysis shows the savings ceiling is set by where the cost is and by the real cost gap between the models. On CPU, a 1B model is only about 1.35–1.6× cheaper per query than an 8B, so even tasks the 1B always handles (summaries, rewrites, extraction) save only about 26%. Teams should measure the oracle and the all-weak cost on their own traffic and hardware before investing in a router.
+The main result is about the workload rather than the router. Per-category analysis of the perfect-hindsight router shows the savings ceiling is set by where the cost is and by the real cost gap between the models. On CPU, a 1B model is only about 1.35–1.6× cheaper per query than an 8B, so even tasks the 1B always handles (summaries, rewrites, extraction) save only about 26%. Teams should measure the hindsight router and the all-weak cost on their own traffic and hardware before investing in a router.
 
-Within that ceiling the router works, but the effect is modest and noisy at n=45. It beats random routing at every threshold up to 0.65 and captures about half of the oracle's savings at 3.8% quality loss. Everything (answers, verdicts, embeddings, neighbour lists, features, fitted models) is stored in MongoDB, so changes to the judge, label, features or threshold are evaluated by replaying stored data rather than re-running the models.
+Within that ceiling the router works, but the effect is modest and noisy at n=45. It beats random routing at every threshold up to 0.65 and captures about half of the hindsight router's savings at 3.8% quality loss. Everything (answers, verdicts, embeddings, neighbour lists, features, fitted models) is stored in MongoDB, so changes to the judge, label, features or threshold are evaluated by replaying stored data rather than re-running the models.
 
 ## Results
 
@@ -29,11 +29,11 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 |---|---|---|---|
 | all_strong | 0.878 | 0.3462 | 0% |
 | all_weak | 0.611 | 0.2184 | 100% |
-| oracle | 0.889 | 0.2845 | 64% |
+| hindsight | 0.889 | 0.2845 | 64% |
 
-**Oracle by category**
+**Perfect-hindsight router by category**
 
-| category | 1B good enough | oracle saves |
+| category | 1B good enough | hindsight saves |
 |---|---|---|
 | factual | 5 / 7 | 50.8% |
 | long_easy | 6 / 6 | 26.1% |
@@ -41,6 +41,16 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 | rewrite | 4 / 6 | 16.5% |
 | coding | 8 / 10 | 15.1% |
 | math | 3 / 8 | 3.6% |
+
+**Token-priced (cloud API) ceiling.** Same queries re-priced by measured token counts, output at 3× input:
+
+| strong : weak price per token | hindsight saves (95% CI) | all-weak saves | router @ 0.40 saves (95% CI) |
+|---|---|---|---|
+| 1.35× | 20.1% (12.6–28.5) | 39.6% | 8.5% (3.3–15.9) |
+| 2× | 33.0% (22.6–43.5) | 59.2% | 11.3% (4.3–20.2) |
+| 5× | 49.1% (32.8–63.9) | 83.7% | 14.9% (6.5–25.6) |
+| 10× | 54.5% (37.6–70.4) | 91.8% | 16.1% (6.9–28.6) |
+| 20× | 57.2% (40.1–75.3) | 95.9% | 16.6% (6.7–29.5) |
 
 **Router (label `weak_fails`; replayed with `sweep --rescore` from stored features and neighbours)**
 
@@ -53,6 +63,8 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 | 0.50 | 56% | 18.2% | 7.59% | +0.081 | FAIL |
 | 0.60 | 71% | 24.1% | 18.99% | +0.023 | FAIL |
 | 0.70 | 91% | 32.9% | 30.38% | −0.024 | FAIL |
+
+**Bootstrap 95% CIs (2,000 resamples of the 45 queries).** At 0.40: router saves 8.6% (2.9–15.5), quality drop 3.8% (0.0–10.0), within the 5% budget in 70% of resamples, lift over random +0.032 (−0.01 to +0.08, positive in 91%). At 0.45: drop 7.6% (1.2–15.9), within budget in only 29%.
 
 The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated accuracy 64%. Weights on standardised features: `knn_p_strong +0.44`, `multi_step +0.28`, `length −0.09`, `numeric −0.12`. The same benchmark routed under the old `strong_wins` label had a lift over random of **−0.027**.
 
@@ -68,7 +80,7 @@ The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated a
 
 ## Key insights
 
-1. **Measure the oracle and the all-weak cost first.** Together they bound what routing can save. Here all-weak saves 36.9% and the oracle 17.8%. No router can do better.
+1. **Measure the perfect-hindsight router and the all-weak cost first.** Together they bound what routing can save. Here all-weak saves 36.9% and the hindsight router 17.8%. No router can do better.
 2. **Model size isn't cost.** On CPU, the 1B model is only about 1.35–1.6× cheaper per query than the 8B. The long_easy category, where the 1B was always good enough, still saves only 26%. On a GPU the gap, and the ceiling, would likely be larger.
 3. **Predict the weak model's failure, not the strong model's win.** A difference of two noisy verdicts is close to unlearnable. A single verdict isn't. This one change took the router from worse than random to better than random.
 4. **Small calibration sets create false signals.** At 30 queries, text features looked predictive and the router appeared to beat random. At 150, those features were at chance. Scale data before trusting features.
@@ -79,7 +91,7 @@ The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated a
 
 ## Caveats
 
-- **Noise.** 45 benchmark queries give wide error bars, and a couple of queries can flip a guardrail result.
+- **Noise.** 45 benchmark queries give wide error bars (see the bootstrap CIs above), and a couple of queries can flip a guardrail result.
 - **Judge self-bias.** The strong model grades its own answers. `JUDGE_MODEL` can point at an independent model, and no human audit of the judge has been done.
 - **Replayed router scores.** The router rows come from `sweep --rescore` after refitting with the new label. The fit uses only calibration data, and the kNN vote is recomputed from each benchmark query's stored neighbours. A fresh `benchmark` would make the same decisions.
 - **Hardware.** Everything ran on CPU. On a GPU the cost gap between the models would likely be much larger, which changes factor 2 of the savings ceiling.

@@ -1,10 +1,15 @@
 services:
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0
+    # Stable hostname: the replica-set config stored in the data volume records it, so a random
+    # container hostname would leave the node unable to find itself after `down`/`up`.
+    hostname: mongodb
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+      # The replica-set keyfile lives here; without it, data survives `down` but mongod can't start.
+      - mongo-config:/data/configdb
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -62,4 +67,5 @@ services:
 
 volumes:
   mongo-data:
+  mongo-config:
   ollama-models:

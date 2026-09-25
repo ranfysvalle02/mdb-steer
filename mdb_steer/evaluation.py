@@ -1,4 +1,4 @@
-"""Scoring a routing policy against the alternatives (all-strong, all-weak, random, oracle).
+"""Scoring a routing policy against the alternatives (all-strong, all-weak, random, hindsight).
 
 Rows are dicts holding both models' attempts (`strong`, `weak`), the routed choice
 (`model_chosen`, `chosen`) and optional `router_compute_ms`. Used by the benchmark, threshold
@@ -24,8 +24,8 @@ def summarize(rows: list[dict[str, Any]], settings: Settings) -> dict[str, Any]:
     weak_c = [r["weak"]["cost_usd"] for r in rows]
     offload = sum(r["model_chosen"] == settings.weak_model for r in rows) / len(rows)
 
-    # Oracle: cheapest model that achieves the best score on each query.
-    oracle = [("weak" if r["weak"]["score"] >= r["strong"]["score"] else "strong") for r in rows]
+    # Hindsight: perfect-hindsight routing, the cheapest model that achieves the best score on each query.
+    hindsight = [("weak" if r["weak"]["score"] >= r["strong"]["score"] else "strong") for r in rows]
 
     strategies = {
         "all_strong": {"quality": mean(strong_q), "cost_usd": sum(strong_c), "offload": 0.0},
@@ -42,10 +42,10 @@ def summarize(rows: list[dict[str, Any]], settings: Settings) -> dict[str, Any]:
             "cost_usd": (1 - offload) * sum(strong_c) + offload * sum(weak_c),
             "offload": offload,
         },
-        "oracle": {
-            "quality": mean(r[m]["score"] for r, m in zip(rows, oracle)),
-            "cost_usd": sum(r[m]["cost_usd"] for r, m in zip(rows, oracle)),
-            "offload": oracle.count("weak") / len(rows),
+        "hindsight": {
+            "quality": mean(r[m]["score"] for r, m in zip(rows, hindsight)),
+            "cost_usd": sum(r[m]["cost_usd"] for r, m in zip(rows, hindsight)),
+            "offload": hindsight.count("weak") / len(rows),
         },
     }
 

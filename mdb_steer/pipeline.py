@@ -93,7 +93,7 @@ def calibrate(
 
     if dimensions or done:
         log("  waiting for vector index...")
-        store.ensure_vector_index(dimensions or len(llm.embed(settings.embed_model, "probe")))
+        store.ensure_vector_index(dimensions or len(store.calibration.find_one({}, {"embedding": 1})["embedding"]))
         log_fit(Router(store, llm, settings).fit(), log)
     return len(items)
 
