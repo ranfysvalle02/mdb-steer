@@ -93,7 +93,7 @@ On 45 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`, 150 calibratio
 On per-token cloud pricing the ceiling rises to about 49–57% once the small model is 5–20× cheaper. Confidence intervals and the
 cloud-pricing tables come from stored data via `python scripts/blog_stats.py` (no model calls).
 
-**Read next:** [key-insights.md](key-insights.md) (lessons and what to do), [blog2.md](blog2.md)
+**Read next:** [exec_summary.md](exec_summary.md) (one page), [key-insights.md](key-insights.md) (lessons and what to do), [blog2.md](blog2.md)
 (plain-language story), [blog.md](blog.md) (technical write-up), [review.md](review.md) (full
 results, CIs and caveats).
 Comparing routers? [routellm.md](routellm.md) summarises the RouteLLM paper, and
