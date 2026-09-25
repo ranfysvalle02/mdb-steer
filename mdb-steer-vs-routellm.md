@@ -37,7 +37,7 @@ of the routers being judged.**
 | Guardrail | none built in | fails with a non-zero exit code if the quality drop exceeds `QUALITY_GUARDRAIL_PCT` (CI-friendly) |
 | Data store | none (stateless router) | MongoDB: calibration, telemetry, router fits, benchmark runs |
 | Works day one | yes, pre-trained | no, needs a calibration run (~150 queries) |
-| Model pair | trained on GPT-4 vs Mixtral; the authors say it carries over to other pairs | whatever you configure; the router is fitted to that exact pair |
+| Model pair | trained on GPT-4 vs Mixtral; carried over to Claude 3 Opus/Sonnet and Llama 3.1 70B/8B without retraining (paper Table 4) | whatever you configure; the router is fitted to that exact pair |
 | Keys / cloud | `mf` and `sw_ranking` need `OPENAI_API_KEY` for embeddings | none: Ollama + Atlas Local in Docker |
 | Serving | OpenAI-compatible server / client drop-in | CLI `route`; no OpenAI-compatible server |
 | Scale of evidence | large public benchmarks | 150 calibration + 45 held-out queries (CIs wide; [#2](https://github.com/ranfysvalle02/mdb-steer/issues/2)) |
@@ -217,7 +217,7 @@ serve mdb-steer's router behind RouteLLM's server by implementing `calculate_str
 RouteLLM
   route(q)  = strong if P(win_strong | q) ≥ α else weak
   PGR       = (r_router − r_weak) / (r_strong − r_weak)
-  APGR      ≈ mean PGR over strong-call shares in [0, 1]
+  APGR      ≈ (1/10) Σ_i PGR at strong-call share c_i     (10 buckets over [0%, 100%]; paper Eq. 8)
 
 mdb-steer
   label     = weak_score < 1.0                                  (weak_fails)
