@@ -54,6 +54,12 @@ Running models is the expensive part. We stored every answer, grade, embedding a
 
 - **So what:** your graded traffic is the lasting asset. Models and prices change; a dataset of "which model handled which request, and how well" keeps its value.
 
+### 9. Start generic, then earn the upgrade with your own data
+RouteLLM's pre-trained BERT router needed no data from us and still beat random routing within the quality budget (5.6% saving on CPU). Our router, trained on 150 of our own graded queries, ranked difficulty better (held-out AUC 0.79 vs 0.62) and saved 8.6%. Both stayed well below the 17.8% ceiling.
+
+- **So what:** an off-the-shelf router is a fine day-one baseline. Training on your own graded traffic is worth a few points, but it can't raise the ceiling.
+- **And:** RouteLLM's own paper points the same way: on MMLU and GSM8K, where answers can be checked, its routers gained far less than on open-ended chat (up to 1.4–1.5× vs random, against 3.66× on MT Bench). If your traffic has right-or-wrong answers, expect less from routing than chatbot benchmarks suggest.
+
 ---
 
 ## What do I do with this?
@@ -76,7 +82,7 @@ mdb-steer does steps 2–5 for you: `calibrate`, `benchmark`, then read the `hin
 |---|---|
 | **under ~15%** | **Don't build a router.** Look at the levers below; they're cheaper and often worth more. |
 | **~15–40%** | **Start simple.** Route by request type or endpoint (e.g. "summaries go to the small model"). Check it with a quality guardrail. |
-| **over ~40%** | **A learned router is worth it.** Predict "will the cheap model fail?", choose the threshold on data the router didn't train on, and compare against random routing. |
+| **over ~40%** | **A learned router is worth it.** Start with an off-the-shelf one (e.g. RouteLLM), then train on your own graded traffic: predict "will the cheap model fail?", choose the threshold on data the router didn't train on, and compare against random routing. |
 
 ### Levers that often beat routing
 Cost sits in long answers, so the cheapest wins usually come from producing fewer tokens:
@@ -89,6 +95,7 @@ Cost sits in long answers, so the cheapest wins usually come from producing fewe
 ### If you do route: a production checklist
 - [ ] **Quality guardrail:** automatically fail a release if quality drops more than an agreed budget (we used 5%).
 - [ ] **Beat random:** check the router against routing the same share of requests at random. If it can't beat that, it isn't learning.
+- [ ] **Beat off-the-shelf:** if you trained your own router, check that it beats a pre-trained one (e.g. RouteLLM) on the same stored answers.
 - [ ] **Hold-out data:** choose thresholds on data the router didn't train on.
 - [ ] **Confidence intervals:** at a few hundred requests, a single request can flip a result.
 - [ ] **Watch drift:** track the cheap model's failure rate on live traffic, and recalibrate when it or your traffic mix changes.
@@ -102,4 +109,4 @@ Model prices keep falling and small models keep getting better. That raises the 
 
 ---
 
-*Numbers from 45 held-out and 150 calibration queries (`llama3.1:8b` vs `llama3.2:1b`, CPU). Full results in [review.md](review.md); story in [blog.md](blog.md) (technical) and [blog2.md](blog2.md) (plain language).*
+*Numbers from 45 held-out and 150 calibration queries (`llama3.1:8b` vs `llama3.2:1b`, CPU). AUC ≈ 0.65 in lesson 5 is leave-one-out on the calibration set; 0.79 in lesson 9 is on the held-out benchmark. Full results in [review.md](review.md); story in [blog.md](blog.md) (technical) and [blog2.md](blog2.md) (plain language); RouteLLM comparison in [mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md); one page in [exec_summary.md](exec_summary.md).*

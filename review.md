@@ -9,6 +9,7 @@
 - **Key finding: two factors set the savings ceiling before any router is trained.** They are the share of cost in queries the small model can handle, and how much cheaper the small model really is on your hardware. On 45 held-out queries the **perfect-hindsight router** sends **64%** of traffic to the 1B model and still saves only **17.8%**.
 - **The label mattered more than the features.** Predicting "did strong beat weak?" was at chance (AUC ≈ 0.50). Predicting "did the weak model fail?" gave AUC ≈ 0.65, and took the router from worse than random to better than random at every threshold up to 0.65.
 - **Router on held-out data:** at threshold 0.40, **24%** offload, **8.6%** savings, **3.8%** quality drop, **PASS**. That's about half the hindsight router's savings. The threshold chosen by cross-validation (0.45) predicted a 4.5% drop but delivered **7.6%** and **fails** the guardrail. We report that miss.
+- **Against RouteLLM's pre-trained `bert` router** (same stored answers, no API key): held-out AUC **0.79 vs 0.62**, best saving within the guardrail **8.6% vs 5.6%** (CPU) and **16.1% vs 12.9%** (10× token pricing). Both beat random; neither gets near the ceiling.
 - 150 calibration and 45 benchmark queries, no overlap between them, 32 tests, CI, and it all runs locally in Docker with no API keys.
 
 ## Executive summary
@@ -68,6 +69,16 @@ Setup: `llama3.1:8b` (strong, also the judge), `llama3.2:1b` (weak), `nomic-embe
 
 The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated accuracy 64%. Weights on standardised features: `knn_p_strong +0.44`, `multi_step +0.28`, `length −0.09`, `numeric −0.12`. The same benchmark routed under the old `strong_wins` label had a lift over random of **−0.027**.
 
+**External baseline: RouteLLM (`scripts/compare_routellm.py`, no model calls, no API key)**
+
+| | mdb-steer | RouteLLM `bert` (`routellm/bert_gpt4_augmented`) |
+|---|---|---|
+| held-out AUC, "weak fails" | 0.787 | 0.617 |
+| best point within 5% guardrail (CPU) | t=0.39: 24% offload, 8.6% saving, 3.8% drop | t=0.40: 24% offload, 5.6% saving, 3.8% drop |
+| best point, 5× / 10× / 20× token pricing | 14.9% / 16.1% / 16.6% | 11.7% / 12.9% / 13.5% |
+
+The two offload different queries (5 of 11 overlap). Their equal quality drop is a coincidence of discrete grades at n=45. RouteLLM's own paper points the same way: on MMLU and GSM8K, where answers can be checked, its routers gained far less than on open-ended chat (up to 1.4–1.5× vs random, against 3.66× on MT Bench).
+
 **Offline signal analysis (leave-one-out on calibration, AUC)**
 
 | signal | predicting "strong beats weak" | predicting "weak fails" |
@@ -87,7 +98,8 @@ The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated a
 5. **Embeddings capture topic, and topic partly predicts failure.** The kNN vote reaches about the same AUC as a per-category failure rate (0.65 vs 0.66). It learns "rewrites and reasoning are risky for the 1B" without being told the categories.
 6. **Judges need categorical verdicts.** A 0–10 scale let an 8B judge give 8/10 to wrong answers.
 7. **Measure compute, not wall-clock time.** Model swapping inflated the costs until all models were kept loaded and cost came from server-side timings.
-8. **Report when the held-out result misses the cross-validated prediction.** The threshold chosen by cross-validation missed the guardrail on held-out data (7.6% drop vs 4.5% predicted). At n=45, a single query moves quality by 1–2 points.
+8. **A generic router is a real baseline.** RouteLLM's pre-trained BERT beat random with no local data. Training on our own graded traffic added about 3 points of saving and a clearly better ranking, but no router moves the ceiling.
+9. **Report when the held-out result misses the cross-validated prediction.** The threshold chosen by cross-validation missed the guardrail on held-out data (7.6% drop vs 4.5% predicted). At n=45, a single query moves quality by 1–2 points.
 
 ## Caveats
 
@@ -113,5 +125,6 @@ The fit: 150 queries, 69 labelled as needing the strong model. Cross-validated a
 1. **A GPU host run.** This is the biggest lever: it tests factor 2 of the ceiling directly.
 2. **200+ benchmark queries,** with confidence intervals (bootstrap over queries) on every reported number ([#2](https://github.com/ranfysvalle02/mdb-steer/issues/2)).
 3. **Judge audit:** an independent judge model plus about 50 human-graded answers to measure the judge's accuracy.
-4. **A cascade baseline:** try the 1B first and escalate on a cheap check. Compare it with prediction-only routing.
-5. **An integration test** that runs a tiny calibrate → fit → benchmark against the Docker stack in CI.
+4. **RouteLLM `mf` and a retrained RouteLLM:** run the `mf` router (needs an embeddings key), and fine-tune RouteLLM's BERT on our calibration labels to separate "architecture" from "training data".
+5. **A cascade baseline:** try the 1B first and escalate on a cheap check. Compare it with prediction-only routing.
+6. **An integration test** that runs a tiny calibrate → fit → benchmark against the Docker stack in CI.

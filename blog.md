@@ -107,6 +107,22 @@ A related warning: on our first 30 calibration queries, text features looked pre
 - **Choose thresholds without looking at the test set,** and report when the held-out result misses the prediction.
 - **Compare against random routing at the same offload rate.** Offloading always saves money. The question is whether it loses less quality than choosing the same share at random.
 
+## What about an off-the-shelf router?
+
+[RouteLLM](https://github.com/lm-sys/RouteLLM) (LMSYS, ICLR 2025) ships routers pre-trained on Chatbot Arena preferences. Its BERT router runs locally, so we scored it on the same 45 stored answers with no new model calls and no API key (`scripts/compare_routellm.py`):
+
+| | mdb-steer | RouteLLM `bert` |
+|---|---|---|
+| AUC for "weak model fails" | **0.79** | 0.62 |
+| best saving within 5% quality budget (CPU) | **8.6%** | 5.6% |
+| same, per-token pricing, weak 10× cheaper | **16.1%** | 12.9% |
+
+Two findings. First, a generic router works on day one: RouteLLM beats random routing and passes the guardrail without seeing any of our data. Second, 150 of our own graded queries buy a better ranking and about 3 more points of saving. But both are far below the ceiling (17.8% on CPU, 54.5% at 10×), so the traffic, not the router, still decides the result.
+
+RouteLLM's own paper points the same way: on MMLU and GSM8K, where answers can be checked, its routers gained far less than on open-ended chat (up to 1.4–1.5× vs random, against 3.66× on MT Bench). Our workload is mostly checkable answers too. Correctness is harder to route on than preference.
+
+The full comparison is in [mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md), and a summary of the paper is in [routellm.md](routellm.md).
+
 ## Why everything lives in MongoDB
 
 Every answer, verdict, embedding, routing feature, neighbour list and fitted model is stored in MongoDB: `calibration` (vector-indexed), `telemetry`, `router_models` and `benchmark_runs`. Running the models is the expensive part, so storing everything makes it a one-time cost:
@@ -114,6 +130,7 @@ Every answer, verdict, embedding, routing feature, neighbour list and fitted mod
 - **Change the judge?** `regrade` re-grades stored answers.
 - **Change the label or features?** `fit`, then `sweep --rescore` recomputes the neighbour vote from the stored neighbour lists and replays the held-out set.
 - **Change the threshold?** `sweep` traces the full cost/quality curve.
+- **Try someone else's router?** `scripts/compare_routellm.py` scored RouteLLM on the stored answers.
 
 The label switch above was tested this way, in seconds, on hours' worth of stored inference.
 
@@ -131,4 +148,4 @@ docker compose run --rm app sweep --rescore
 
 Replace `data/benchmark.jsonl` with a sample of your own queries and look at the `hindsight` and `all_weak` rows first. If hindsight doesn't save much, stop there. If it does, the router shows how much of that saving you can actually capture.
 
-For the lessons in one page, plus a decision table for "router or not?" and the cheaper levers to try first, see [key-insights.md](key-insights.md).
+For the lessons on one page, plus a decision table for "router or not?" and the cheaper levers to try first, see [key-insights.md](key-insights.md). For the one-page version for leadership, see [exec_summary.md](exec_summary.md).

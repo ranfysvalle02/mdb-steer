@@ -90,6 +90,16 @@ On the 45 test questions:
 - Quality dropped **3.8%**, inside our 5% budget.
 - It did better than routing the same share of questions at random.
 
+## What about a ready-made router?
+
+Researchers at LMSYS published [RouteLLM](https://github.com/lm-sys/RouteLLM), a router trained on hundreds of thousands of human votes about which model gave the better answer. It needs no data from you. We tried its free, local version on the same 45 questions:
+
+- It **worked out of the box**: better than random, and inside the 5% quality budget.
+- It saved **5.6%**, against **8.6%** for our router, which had learned from 150 of our own graded questions.
+- Neither came close to the 18% a perfect router would save.
+
+The RouteLLM paper found the same pattern we did: on tests where answers are simply right or wrong (school math, multiple-choice exams), routing saved much less than on open-ended chat. Getting the right answer is harder to predict than which answer people prefer.
+
 ## How sure are we?
 
 45 questions isn't many, so we reshuffled the results 2,000 times (bootstrapping) to see how much the numbers could move:
@@ -134,4 +144,4 @@ docker compose run --rm app sweep --rescore
 
 Swap in a sample of your own questions and look at the **hindsight** row first. If a perfect router would only save 10%, you have your answer, and you've saved yourself a project. If it would save 50%, build the router, and use the numbers above to check how much of that it's really getting.
 
-**Want the short version?** [key-insights.md](key-insights.md) has the lessons on one page, an afternoon test you can run on your own traffic, and a simple table for deciding whether to build a router at all.
+**Want the short version?** [key-insights.md](key-insights.md) has the lessons on one page, an afternoon test you can run on your own traffic, and a simple table for deciding whether to build a router at all. [exec_summary.md](exec_summary.md) fits it all on one page.

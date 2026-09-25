@@ -25,7 +25,8 @@ mdb-steer runs a large and a small model on real queries, grades every answer, a
    requests saved 18% of cost.
 3. **A router trained on your own data beats a generic one, but only somewhat.** mdb-steer, trained on 150 of our
    own graded queries, ranked difficulty better than RouteLLM's pre-trained router (AUC 0.79 vs 0.62) and saved
-   about 3 points more. Neither got past a third of the ceiling.
+   about 3 points more. Neither captured more than half of the ceiling on CPU, or a third of it at cloud prices. RouteLLM's own paper found the same thing: where answers
+   are right or wrong (math, exams), routing gains were far smaller than on open-ended chat.
 4. **Keep every graded answer.** Storing answers, grades and costs in MongoDB turned every later
    question (new prices, new labels, a new router like RouteLLM) into a re-read in seconds, with no model re-runs.
 

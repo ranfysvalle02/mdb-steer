@@ -130,17 +130,18 @@ you can actually learn, and a combiner on top.
    have short answers.
 2. **Check the ceiling before comparing routers.** If hindsight saves under ~15%, the gap between RouteLLM and
    mdb-steer doesn't matter. See the decision table in [key-insights.md](key-insights.md#then-decide).
-3. **Your traffic vs Arena traffic.** The more your queries look like general chat, the better RouteLLM's
+3. **Checkable answers route worse.** RouteLLM's own paper points the same way: on MMLU and GSM8K, where answers can be checked, its routers gained far less than on open-ended chat (up to 1.4–1.5× vs random, against 3.66× on MT Bench). mdb-steer's traffic is mostly checkable too, which helps explain why both routers stay far below the ceiling.
+4. **Your traffic vs Arena traffic.** The more your queries look like general chat, the better RouteLLM's
    pre-trained weights will do. For narrow domains, expect a router trained on your own data to do better.
-4. **Compare labels as well as routers.** Preferences (RouteLLM) and correctness (mdb-steer) can disagree. When
+5. **Compare labels as well as routers.** Preferences (RouteLLM) and correctness (mdb-steer) can disagree. When
    quality means "gets the right answer", use correctness grades to evaluate both.
-5. **Privacy and keys.** `mf` and `sw_ranking` send every query to OpenAI for embeddings. Use `bert` (local) if
+6. **Privacy and keys.** `mf` and `sw_ranking` send every query to OpenAI for embeddings. Use `bert` (local) if
    that's unacceptable, or if you want to keep mdb-steer's "no API keys" setup.
-6. **Thresholds don't carry over.** RouteLLM's example `0.11593` was calibrated on Arena data. On your traffic,
+7. **Thresholds don't carry over.** RouteLLM's example `0.11593` was calibrated on Arena data. On your traffic,
    sweep `α` and pick it the way mdb-steer does: on held-out data, within a quality guardrail.
-7. **Latency.** RouteLLM `mf` adds a remote embedding call; `bert` adds a local forward pass; mdb-steer adds a
+8. **Latency.** RouteLLM `mf` adds a remote embedding call; `bert` adds a local forward pass; mdb-steer adds a
    local embedding plus a `$vectorSearch` query. All are small next to generation time, but measure them.
-8. **Drift.** RouteLLM's weights are fixed. mdb-steer's telemetry can be fed back into calibration. With either one,
+9. **Drift.** RouteLLM's weights are fixed. mdb-steer's telemetry can be fed back into calibration. With either one,
    keep watching how often the weak model fails on live traffic.
 
 ## 5. When to use which
@@ -174,7 +175,7 @@ router. The scoring logic is RouteLLM's own. Scores are cached in the `routellm_
 
 | | mdb-steer | RouteLLM `bert` |
 |---|---|---|
-| AUC for "weak model fails" (threshold-free) | **0.787** | 0.617 |
+| AUC for "weak model fails" on the held-out set (threshold-free) | **0.787** | 0.617 |
 | best point within 5% guardrail, CPU cost | 24% offload, **8.6%** saving, 3.8% drop | 24% offload, 5.6% saving, 3.8% drop |
 | same, per-token pricing, weak 10× cheaper | **16.1%** saving | 12.9% saving |
 | thresholds beating random at the same offload | 81 / 92 | 74 / 99 |
@@ -184,7 +185,7 @@ What this shows:
 - **RouteLLM `bert` works on day one, with no calibration data:** it beats random routing and passes the guardrail.
 - **mdb-steer, fitted on 150 of your own graded queries, ranks better** (AUC 0.79 vs 0.62) and saves
   about 3 points more at the same offload and quality. At equal offload, it sends away queries that cost more.
-- **Both are far below the ceiling.** Neither captures more than a third of the hindsight saving. The ceiling
+- **Both are far below the ceiling.** Neither captures more than about half of the hindsight saving on CPU (8.6% of 17.8%), or a third of it at 10× token pricing (16.1% of 54.5%). The ceiling
   and the share of hard queries still decide the outcome more than the choice of router.
 - Caveat: with 45 queries, one query moves offload by 2.2 points. The two routers offload different
   queries (only 5 of 11 overlap), and their equal quality drop is a coincidence of the discrete grades.

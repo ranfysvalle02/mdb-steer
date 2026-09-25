@@ -93,12 +93,20 @@ On 45 held-out queries (CPU-only, `llama3.1:8b` vs `llama3.2:1b`, 150 calibratio
 On per-token cloud pricing the ceiling rises to about 49–57% once the small model is 5–20× cheaper. Confidence intervals and the
 cloud-pricing tables come from stored data via `python scripts/blog_stats.py` (no model calls).
 
-**Read next:** [exec_summary.md](exec_summary.md) (one page), [key-insights.md](key-insights.md) (lessons and what to do), [blog2.md](blog2.md)
-(plain-language story), [blog.md](blog.md) (technical write-up), [review.md](review.md) (full
-results, CIs and caveats).
-Comparing routers? [routellm.md](routellm.md) summarises the RouteLLM paper, and
-[mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md) compares the two approaches, with a keyless head-to-head
-(`python scripts/compare_routellm.py`).
+- **vs RouteLLM:** LMSYS's pre-trained `bert` router, scored on the same stored answers with no API key,
+  saves 5.6% at the same quality (12.9% at 10× token pricing, vs mdb-steer's 16.1%). Held-out AUC is 0.62 vs mdb-steer's 0.79.
+  A generic router works on day one. Training on your own traffic ranks better, but neither moves the ceiling.
+
+## Read next
+
+| doc | for |
+|---|---|
+| [exec_summary.md](exec_summary.md) | one page for decision-makers |
+| [key-insights.md](key-insights.md) | lessons, the afternoon test, and "router or not?" |
+| [blog2.md](blog2.md) / [blog.md](blog.md) | the story, plain-language / technical |
+| [review.md](review.md) | full results, confidence intervals, caveats |
+| [routellm.md](routellm.md) | the RouteLLM paper, summarised and checked against arXiv v4 |
+| [mdb-steer-vs-routellm.md](mdb-steer-vs-routellm.md) | head-to-head: mechanics, pros and cons, when to use which |
 
 ## Quickstart
 
@@ -189,6 +197,9 @@ tests/         fast unit tests, no models or database needed
 data/
   calibration.jsonl   150 router training queries
   benchmark.jsonl     45 held-out evaluation queries
+scripts/
+  blog_stats.py        bootstrap CIs and cloud-pricing tables from stored runs
+  compare_routellm.py  RouteLLM baseline on stored answers (pip install -e ".[routellm]")
 ```
 
 ## Development
